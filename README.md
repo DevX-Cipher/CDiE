@@ -1,4 +1,4 @@
-# cdie — Detect It Easy console scanner, pure C port
+# [C]DiE — Detect It Easy console scanner, pure C port
 
 `cdie` is a dependency-free C99 re-implementation of the **Detect It Easy**
 console scanner (`diec`). It loads the stock DIE signature database, runs the
