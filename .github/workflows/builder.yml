@@ -5,7 +5,7 @@ on:
     branches:
       - main
   workflow_dispatch:
-    schedule:
+  schedule:
     - cron: '0 0 * * *'
 
 permissions:
@@ -30,6 +30,7 @@ jobs:
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release ..
           make -j$(nproc)
+          mv src/console/cdie src/console/cdie_linux
 
       - name: Upload Linux Release
         if: github.event_name != 'pull_request'
@@ -38,7 +39,7 @@ jobs:
           tag_name: Beta
           draft: false
           prerelease: true
-          files: build/src/console/cdie
+          files: build/src/console/cdie_linux
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
@@ -67,7 +68,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-build-macos:
+  build-macos:
     runs-on: macos-latest
     steps:
       - name: Checkout repository
