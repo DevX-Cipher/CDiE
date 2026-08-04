@@ -41,6 +41,7 @@ jobs:
           files: build/src/console/cdie
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
   build-windows:
     runs-on: windows-latest
 
@@ -63,5 +64,36 @@ jobs:
           draft: false
           prerelease: true
           files: build/src/console/Release/cdie.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install required libs
+        run: |
+          brew update
+          brew install cmake
+
+      - name: Build cdie
+        run: |
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(sysctl -n hw.logicalcpu)
+          # Benennt die Datei direkt nach dem Kompilieren um
+          mv src/console/cdie src/console/cdie_macos
+
+      - name: Upload macOS Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Beta
+          draft: false
+          prerelease: true
+          files: build/src/console/cdie_macos
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
