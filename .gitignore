@@ -1,0 +1,35 @@
+# build output
+build/
+cmake-build-*/
+
+# packaging: only finished artefacts belong in release/, and even those are
+# rebuilt from packaging/windows/build_portable_windows.cmd
+release/
+*.o
+*.obj
+*.exe
+*.pdb
+*.ilk
+*.dll
+*.so
+*.so.*
+*.dylib
+*.a
+*.lib
+*.exp
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.ninja
+.ninja_*
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# internal notes, not part of the shipped package
+private_docs/

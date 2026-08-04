@@ -1,0 +1,171 @@
+1.0.0
+    Initial release.
+
+    * Pure C99 port of the Detect It Easy console scanner. No external
+      dependencies.
+    * Embedded JavaScript engine (ES5 subset): lexer, parser, tree-walking
+      evaluator, Object/Function/Array/String/Number/Boolean/Math/JSON and a
+      backtracking regular expression engine with look-ahead and back
+      references.
+    * PE / PE+ parser: sections, imports with position hashes, exports,
+      resource tree, VS_VERSIONINFO, manifest, debug directory, Rich header,
+      security directory.
+    * .NET metadata: the #Strings, #US, #Blob and #GUID heaps plus the full
+      #~ table stream (heap and coded index widths, per-table row sizes and
+      offsets), backing isNetTypePresent, isNetMethodPresent,
+      isNetFieldPresent, isNetGlobalCctorPresent, getNetModuleName,
+      getNetAssemblyName, findSignatureInBlob_NET and compareEP_NET.
+    * JPEG parser: segments, JFIF version, COM comment, DQT hash, APP marker
+      presence and a TIFF/IFD reader for the EXIF camera make and model.
+    * PNG parser: chunk walk with IHDR, pHYs and bKGD, producing the same
+      description string as XPNG::getInfo.
+    * Plain text detection: isPlainText() implements XBinary::isPlainTextType
+      (32 KB sample, BOM rejection, NUL rejection and the printable / control
+      / extended ratio tests). isUTF8Text and isUnicodeText remain stubs.
+    * APK parser: locates AndroidManifest.xml in the ZIP central directory,
+      DEFLATE-decompresses it with a from-scratch RFC 1951 decoder
+      (format/inflate.c, no zlib dependency) and decodes the Android binary
+      XML, so getAndroidManifestRecord returns the package name and version.
+    * PDF parser: reduces objects to token lists via classic xref tables,
+      cross-reference-stream deep scan and incremental-update chaining, then
+      answers getStringValuesByKey, the /Filter list, the version and the
+      header comment. Stream contents are not decompressed.
+    * DOTNET / FT_CLI_ASSEMBLY: a .NET PE (non-empty COM descriptor data
+      directory) is additionally typed as CLI assembly. Scripts under
+      db/PE/DOTNET load as that type and run only for .NET PEs, bound to a
+      DOTNET object that exposes getNetVersion, getNetModuleName/AssemblyName,
+      isNetType/Method/Field/GlobalCctorPresent, isNetString/UString/Unicode
+      String/ObjectPresent and findSignatureInBlob_NET - matching the
+      reference's XCLIAssembly split and dotnet_script. PE keeps the same
+      methods, so existing signatures are unaffected. Display name ".NET".
+    * ELF parser: header, section table (names via .shstrtab), program
+      headers, dynamic libraries (DT_NEEDED), the general-options string and
+      the entry-point offset for compareEP - backing the ELF compiler and
+      library (GLIBC, GCC, ...) detections.
+    * Mach-O parser: load-command walk for LC_LOAD_DYLIB libraries, sections
+      and the LC_MAIN entry point.
+    * DEX parser: version, the map-items CRC-32 hash (the format detail), and
+      the string / type-descriptor tables behind the obfuscator detections
+      (e.g. ProGuard).
+    * --verbose "Operation system" line for DEX, Mach-O, NE and ELF (previously
+      only PE): DEX maps the version to an Android release ("Android(9.0)
+      [Dalvik, 32-bit]"); Mach-O resolves the OS and version from the CPU type
+      and the LC_BUILD_VERSION / LC_VERSION_MIN commands with the
+      Foundation-version fallback ("macOS(13.0.0)[X86_64, 64-bit]", "Mac OS
+      [I860_LITTLE, 32-bit]"); NE reads the target-OS byte ("Windows[286,
+      16SEG]"); ELF resolves the OSABI, the program interpreter, the
+      .comment-section distribution (Ubuntu/Debian/Red Hat/SUSE/...) with the
+      Ubuntu release, the GNU note's "ABI: x.y.z" and the e_machine arch
+      ("Ubuntu Linux(22.04.3, ABI: 3.2.0)[AMD64, 64-bit]", "Unix[MIPS,
+      32-bit]"). All four match diec byte for byte.
+    * PYC parser: the two-byte magic maps to the interpreter release
+      (getFileFormatVersion, so "Python Bytecode(3.13b1)"), and detection now
+      requires size >= 12, the "\r\n" marker and a magic that is a *known*
+      interpreter release, matching diec (a marker with an unlisted magic stays
+      Binary). isConstPresent reads the module code object's marshalled
+      constants tuple and reports a top-level string constant; like
+      XPYC::getCodeObject it stops at the first nested code object, so it sees
+      exactly the constants diec can (backing db/PYC/packer_UPP). The marshal
+      reader is depth-capped so a crafted deeply-nested constants tuple cannot
+      overflow the stack.
+    * ISO 9660: getApplicationIdentifier and getDataPreparerIdentifier read the
+      Primary Volume Descriptor (offset 0x8000) fields, Latin-1 up to the first
+      NUL then trimmed, so the tool/library detections (CDIMAGE, genisoimage,
+      xorriso, Nero, libburn, ...) fire.
+    * Archive predicates over ZIP-family containers (ZIP/JAR/APK/NPM/IPA): the
+      central directory is walked into a record-name list, backing
+      isArchiveRecordPresent (exact) and isArchiveRecordPresentExp (regex over
+      the names, matching XArchive::isRegExpPresent), and META-INF/MANIFEST.MF
+      is decompressed so getManifestRecord answers (e.g. SingleJar's
+      "Created-By"). package/package.json is decompressed too, so
+      getPackageJsonRecord returns a top-level string field (name, version)
+      like QJsonObject::value(key).toString(). APK keeps its AndroidManifest.xml
+      parse as well.
+    * Util object: the 64-bit arithmetic helpers div64, divu64, shlu64 and
+      shru64 (Util_script), which the database uses because JS numbers are
+      doubles. A zero divisor yields -1 as in the reference. Previously the Util
+      object was empty, so these 86 call sites read undefined.
+    * New MSDOS/read builtins the database calls: isNE/isLE/isLX (the new-exe
+      magic at e_lfanew), read_UUID (a GUID string), read_ucsdString/UCSD (a
+      length-prefixed UCSD string, NULs shown as spaces) and read_float16/F16
+      (an IEEE-754 half). These backed database scripts that previously found
+      the methods undefined.
+    * Windows file and directory I/O uses the wide APIs (CreateFileW,
+      GetFileAttributesW, FindFirstFileW, GetCommandLineW) with UTF-8 <-> UTF-16
+      conversion at the boundary, so non-ANSI paths (e.g. a Cyrillic file name)
+      open. The executable still imports KERNEL32 only, now 23 functions.
+    * DIE signature engine: full signature syntax ('text', .., **, %%, %&,
+      !%, _%, $$, ##, ++), memory maps, RVA/VA translation.
+    * Script API: ~200 Binary/PE/MSDOS methods plus the global helpers
+      (_setResult, _isResultPresent, _removeResult, includeScript, ...).
+    * Loads the stock DIE database unchanged, including the main, extra and
+      custom databases with the original ordering rules.
+    * Output formats: text, JSON, XML, CSV, TSV, all byte-identical to diec.
+      The structured formats reproduce DiE's shapes exactly: the JSON nests
+      the records under a file-part entry with QJsonObject's alphabetical key
+      order, the XML names the file-part element after the file type and puts
+      the result string in the element text, and CSV/TSV carry five
+      semicolon- or tab-separated fields with a lower case type. An empty
+      result set uses DiE's separate shape: no file-part wrapper, one bare
+      record whose string is the file type.
+    * Short options are diec's, which are not always the mnemonic letter:
+      -a is --alltypes, -p is --plaintext, -l is --profiling, -s is
+      --showdatabase, -u is --heuristicscan, -g is --aggressivecscan, -b is
+      --verbose, -U is --hideunknown, -M is --messages. The letters this port
+      used earlier still work as aliases where they do not collide.
+    * --verbose reproduces the "Operation system" line, including the version
+      name table (Vista, 7, 8, 8.1, 10, ...), the 64-bit floor at Server 2003
+      and the "<arch>, <mode>" suffix from the PE machine table.
+    * die_library-compatible shared and static libraries (lib/): die.dll +
+      die.lib and die_static.lib on Windows, libdie.so and libdie.a on Unix.
+      The public header lib/die.h matches horsicq/die_library - same flags,
+      same exported functions (DIE_ScanFile/Memory/LoadDatabase/ScanFileEx/
+      FreeMemory A and W, plus the Windows DIE_VB_ScanFile[Callback]) - so
+      die_library's own samples build against it unchanged. The result string
+      is ScanItemModel::toString() (the cdie formatters); flags are mapped as
+      XScanEngine::setScanFlags; "$data" resolves to the executable directory.
+      Toggle with -DCDIE_BUILD_LIBRARY (default ON). See docs/LIBRARY.md.
+    * cdie_scan_file refactored to share its body with a new cdie_scan_memory
+      (backs DIE_ScanMemory); the console output is unchanged (348/348).
+    * Windows portable packaging: packaging/windows/build_portable_windows.cmd
+      builds, installs and zips via CPack. The package bundles the signature
+      database and the library artifacts, so the extracted folder runs with no
+      arguments and can be linked against.
+    * All C standard library calls go through x_ prefixed stubs in
+      core/utils.h. core/utils.c, utils_fp.c, utils_math.c and utils_entry.c
+      are the only translation units that see a platform header; FILE * never
+      escapes utils.c. Macros that must expand in the caller's frame are
+      exposed as X_VA_* and X_OFFSETOF.
+    * Windows runtime layer is Win32 only: x_strlen is lstrlenA, x_malloc is
+      HeapAlloc, x_fopen is CreateFileW, x_printf is WriteFile. lstrcmpA is
+      deliberately not used - it is locale aware and would reorder the
+      signature database.
+    * CRT-free link on 64 bit MSVC (option CDIE_NO_CRT, default ON):
+      /NODEFAULTLIB with entry point x_entry_point, which builds argv from
+      GetCommandLineW and calls x_main. The resulting executable imports
+      23 functions from KERNEL32.dll and nothing else.
+    * Own floating point conversions in core/utils_fp.c, exact via a small
+      bignum: correctly rounded x_strtod (normals and subnormals), shortest
+      round-trip x_dtoa_shortest (Steele & White) and the counted-digit
+      x_dtoa_fixed / x_dtoa_precision. The last two follow the ECMAScript
+      toFixed and toPrecision algorithms rather than printf %f / %g, which
+      differ in trailing zeros, the exponential threshold and exponent
+      padding. x_snprintf is integer only by design.
+    * Own libm subset in core/utils_math.c (sqrt via SSE2 on x64, log, exp,
+      sin and cos from the fdlibm polynomials), accurate to about 1 ULP.
+    * tests/test_runtime.c covers the runtime layer directly: formatting,
+      both directions of the double <-> text conversions, the math subset and
+      the string and memory stubs. Configure with -DCDIE_BUILD_TESTS=ON; the
+      executable exits with the number of failures. It links only
+      core/utils*.c with the scanner's flags, so building it also checks that
+      the CRT-free link still works.
+    * Builds as strict ISO C99 on both MSVC 19.44 and GCC 11.4 with no
+      warnings, and the two produce identical scan output.
+    * Verified byte-identical to diec on a 348 file corpus (Windows system
+      DLLs, Visual Studio .NET assemblies, Qt binaries, Python, plus a whole
+      directory of scripts, text, images, an APK and a PDF): 348 same,
+      0 different. A separate 40 file PDF sweep (classic xref, cross-reference
+      streams, incremental updates) also matches, as does the APK manifest
+      extraction. A 30 file subset is compared across every output mode
+      (-j -x -c -t -p -b), 30/30 in each, and --showdatabase matches too,
+      counts and names.

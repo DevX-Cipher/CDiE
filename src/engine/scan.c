@@ -1,0 +1,491 @@
+/* Copyright (c) 2026 hors<horsicq@gmail.com>
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+/* scan.c - scan orchestration: pick the file type, run the _init scripts and
+ * then every applicable detection script in database order.               */
+
+#include "cdie.h"
+#include "../format/xft.h"
+
+
+void scan_options_init(ScanOptions *pOptions)
+{
+    x_memset(pOptions, 0, sizeof(*pOptions));
+    pOptions->bShowType = 1;
+    pOptions->bShowVersion = 1;
+    pOptions->bShowInfo = 1;
+    pOptions->bUseCustomDatabase = 1;
+    pOptions->bUseExtraDatabase = 1;
+    pOptions->bSort = 1;
+}
+
+void scan_options_free(ScanOptions *pOptions)
+{
+    cd_free(pOptions->pMainDatabasePath);
+    cd_free(pOptions->pExtraDatabasePath);
+    cd_free(pOptions->pCustomDatabasePath);
+    x_memset(pOptions, 0, sizeof(*pOptions));
+}
+
+void scan_result_free(ScanResult *pResult)
+{
+    int i = 0;
+
+    for (i = 0; i < pResult->nCount; i++) {
+        cd_free(pResult->pRecords[i].pType);
+        cd_free(pResult->pRecords[i].pName);
+        cd_free(pResult->pRecords[i].pVersion);
+        cd_free(pResult->pRecords[i].pInfo);
+    }
+
+    cd_free(pResult->pRecords);
+
+    for (i = 0; i < pResult->nErrorCount; i++) {
+        cd_free(pResult->ppErrors[i]);
+    }
+
+    cd_free(pResult->ppErrors);
+    cd_free(pResult->pFileName);
+    x_memset(pResult, 0, sizeof(*pResult));
+}
+
+static void result_add_error(ScanResult *pResult, const char *pText)
+{
+    pResult->ppErrors = (char **)cd_realloc(pResult->ppErrors, (size_t)(pResult->nErrorCount + 1) * sizeof(char *));
+    pResult->ppErrors[pResult->nErrorCount++] = cd_strdup(pText);
+}
+
+/* Returns the first path segment of the signature name, uppercased. */
+static void signature_prefix(const char *pName, char *pBuf, size_t nBufSize)
+{
+    size_t i = 0;
+
+    for (i = 0; (i + 1 < nBufSize) && pName[i] && (pName[i] != '.'); i++) {
+        char nChar = pName[i];
+
+        if ((nChar >= 'a') && (nChar <= 'z')) {
+            nChar = (char)(nChar - 'a' + 'A');
+        }
+
+        pBuf[i] = nChar;
+    }
+
+    pBuf[i] = 0;
+}
+
+static int should_execute(DBSignature *pRecord, XFileType fileType, int bIsCliAssembly, ScanOptions *pOptions)
+{
+    char sPrefix[64];
+
+    /* CLI-assembly (PE/DOTNET) scripts run only when the file is a .NET PE;
+     * the primary file type is still PE, so they cannot go through the plain
+     * xft_check. Everything else matches the picked type as usual. */
+    if (pRecord->fileType == XFT_CLI_ASSEMBLY) {
+        if (!bIsCliAssembly) {
+            return 0;
+        }
+    } else if (!xft_check(pRecord->fileType, fileType)) {
+        return 0;
+    }
+
+    signature_prefix(pRecord->pName, sPrefix, sizeof(sPrefix));
+
+    if ((!pOptions->bDeepScan) && ((x_strcmp(sPrefix, "DS") == 0) || (x_strcmp(sPrefix, "EP") == 0))) {
+        return 0;
+    }
+
+    if ((!pOptions->bHeuristicScan) && (x_strcmp(sPrefix, "HEUR") == 0)) {
+        return 0;
+    }
+
+    if (x_strcmp(pRecord->pName, "_init") == 0) {
+        return 0;
+    }
+
+    if (pRecord->databaseType == DB_MAIN) {
+        return 1;
+    }
+
+    if (pOptions->bUseCustomDatabase && (pRecord->databaseType == DB_CUSTOM)) {
+        return 1;
+    }
+
+    if (pOptions->bUseExtraDatabase && (pRecord->databaseType == DB_EXTRA)) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int sort_records(const void *pLeft, const void *pRight)
+{
+    const ScanRecord *pA = (const ScanRecord *)pLeft;
+    const ScanRecord *pB = (const ScanRecord *)pRight;
+
+    if (pA->nPrio != pB->nPrio) {
+        return (pA->nPrio < pB->nPrio) ? -1 : 1;
+    }
+
+    return 0;
+}
+
+/* Stable insertion sort: std::sort in the reference engine behaves like a
+ * stable sort for the small result lists produced by a single scan.        */
+static void stable_sort_records(ScanRecord *pRecords, int nCount)
+{
+    int i = 0;
+    int j = 0;
+
+    for (i = 1; i < nCount; i++) {
+        ScanRecord key = pRecords[i];
+
+        j = i - 1;
+
+        while ((j >= 0) && (sort_records(&pRecords[j], &key) > 0)) {
+            pRecords[j + 1] = pRecords[j];
+            j--;
+        }
+
+        pRecords[j + 1] = key;
+    }
+}
+
+static XFileType pick_file_type(XFTSet *pSet)
+{
+    if (xft_contains(pSet, XFT_PE32)) return XFT_PE32;
+    if (xft_contains(pSet, XFT_PE64)) return XFT_PE64;
+    if (xft_contains(pSet, XFT_ELF32)) return XFT_ELF32;
+    if (xft_contains(pSet, XFT_ELF64)) return XFT_ELF64;
+    if (xft_contains(pSet, XFT_MACHO32)) return XFT_MACHO32;
+    if (xft_contains(pSet, XFT_MACHO64)) return XFT_MACHO64;
+    if (xft_contains(pSet, XFT_LX)) return XFT_LX;
+    if (xft_contains(pSet, XFT_LE)) return XFT_LE;
+    if (xft_contains(pSet, XFT_NE)) return XFT_NE;
+    if (xft_contains(pSet, XFT_DOS16M)) return XFT_DOS16M;
+    if (xft_contains(pSet, XFT_DOS4G)) return XFT_DOS4G;
+    if (xft_contains(pSet, XFT_MSDOS)) return XFT_MSDOS;
+    if (xft_contains(pSet, XFT_APK)) return XFT_APK;
+    if (xft_contains(pSet, XFT_IPA)) return XFT_IPA;
+    if (xft_contains(pSet, XFT_JAR)) return XFT_JAR;
+    if (xft_contains(pSet, XFT_ZIP)) return XFT_ZIP;
+    if (xft_contains(pSet, XFT_DEX)) return XFT_DEX;
+    if (xft_contains(pSet, XFT_NPM)) return XFT_NPM;
+    if (xft_contains(pSet, XFT_MACHOFAT)) return XFT_MACHOFAT;
+    if (xft_contains(pSet, XFT_AMIGAHUNK)) return XFT_AMIGAHUNK;
+    if (xft_contains(pSet, XFT_PDF)) return XFT_PDF;
+    if (xft_contains(pSet, XFT_CFBF)) return XFT_CFBF;
+    if (xft_contains(pSet, XFT_RAR)) return XFT_RAR;
+    if (xft_contains(pSet, XFT_ISO9660)) return XFT_ISO9660;
+    if (xft_contains(pSet, XFT_JPEG)) return XFT_JPEG;
+    if (xft_contains(pSet, XFT_PNG)) return XFT_PNG;
+    if (xft_contains(pSet, XFT_JAVACLASS)) return XFT_JAVACLASS;
+    if (xft_contains(pSet, XFT_PYC)) return XFT_PYC;
+
+    return XFT_BINARY;
+}
+
+static void run_script(DieEngine *pEngine, DBSignature *pRecord, int bCallDetect)
+{
+    JSCtx *pCtx = pEngine->pJs;
+    JSVal global;
+    JSVal detect;
+    JSVal args[3];
+    JSVal callResult;
+
+    /* Setting CDIE_TRACE traces the script order, which is the quickest way
+     * to find the culprit when a rule misbehaves on an unusual input.      */
+    if (x_getenv("CDIE_TRACE")) {
+        x_fprintf(x_stderr(), "[cdie] %s\n", pRecord->pName);
+        x_fflush(x_stderr());
+    }
+
+    js_clear_error(pCtx);
+
+    if (!js_eval_nested(pCtx, pRecord->pText, pRecord->pName)) {
+        char sBuf[1024];
+
+        x_snprintf(sBuf, sizeof(sBuf), "%s: %s", pRecord->pName, js_error(pCtx));
+        result_add_error(pEngine->pResult, sBuf);
+        js_clear_error(pCtx);
+
+        return;
+    }
+
+    if (!bCallDetect) {
+        return;
+    }
+
+    global = js_global(pCtx);
+    detect = js_get(pCtx, global, "detect");
+
+    if (!js_is_callable(detect)) {
+        js_release(pCtx, detect);
+        js_release(pCtx, global);
+
+        return;
+    }
+
+    args[0] = js_bool(pEngine->pOptions->bShowType);
+    args[1] = js_bool(pEngine->pOptions->bShowVersion);
+    args[2] = js_bool(pEngine->pOptions->bShowInfo);
+
+    callResult = js_call(pCtx, detect, global, 3, args);
+
+    if (js_has_exception(pCtx)) {
+        char sBuf[1024];
+
+        x_snprintf(sBuf, sizeof(sBuf), "%s: %s", pRecord->pName, js_error(pCtx));
+        result_add_error(pEngine->pResult, sBuf);
+        js_clear_error(pCtx);
+    }
+
+    js_release(pCtx, callResult);
+    js_release(pCtx, detect);
+    js_release(pCtx, global);
+}
+
+/* The scan proper, over an already-populated XBFile (the struct is taken by
+ * value and closed here). Both cdie_scan_file and cdie_scan_memory funnel
+ * through this so the two entry points share one verified path. */
+static int scan_engine_run(XBFile *pOpenedFile, DBase *pDb, ScanOptions *pOptions, ScanResult *pResult)
+{
+    DieEngine engine;
+    XFTSet set;
+    XBMemoryMap binaryMap;
+    int i = 0;
+    int nGlobalInit = -1;
+    int nTypeInit = -1;
+
+    x_memset(&engine, 0, sizeof(engine));
+    engine.file = *pOpenedFile;
+
+    xft_detect(&engine.file, &set);
+    engine.fileType = pick_file_type(&set);
+    /* A .NET PE is typed both as PE and CLI assembly; the primary type stays
+     * PE, but the CLI-assembly flag drives the DOTNET object and the
+     * PE/DOTNET scripts. */
+    engine.bIsCliAssembly = xft_contains(&set, XFT_CLI_ASSEMBLY);
+    engine.pDb = pDb;
+    engine.pOptions = pOptions;
+    engine.pResult = pResult;
+
+    if ((engine.fileType == XFT_PE32) || (engine.fileType == XFT_PE64)) {
+        engine.bHasPE = xpe_parse(&engine.pe, &engine.file);
+    } else if (engine.fileType == XFT_JPEG) {
+        engine.bHasJpeg = xjpeg_parse(&engine.jpeg, &engine.file);
+    } else if (engine.fileType == XFT_PNG) {
+        engine.bHasPng = xpng_parse(&engine.file, &engine.png);
+    } else if (engine.fileType == XFT_APK) {
+        engine.bHasApk = xapk_parse(&engine.file, &engine.apk);
+    } else if (engine.fileType == XFT_PDF) {
+        engine.bHasPdf = xpdf_parse(&engine.file, &engine.pdf);
+    } else if ((engine.fileType == XFT_ELF) || (engine.fileType == XFT_ELF32) || (engine.fileType == XFT_ELF64)) {
+        engine.bHasElf = xelf_parse(&engine.file, &engine.elf);
+    } else if (engine.fileType == XFT_DEX) {
+        engine.bHasDex = xdex_parse(&engine.file, &engine.dex);
+    } else if ((engine.fileType == XFT_MACHO) || (engine.fileType == XFT_MACHO32) || (engine.fileType == XFT_MACHO64)) {
+        engine.bHasMach = xmach_parse(&engine.file, &engine.mach);
+    } else if (engine.fileType == XFT_PYC) {
+        engine.bHasPyc = xpyc_parse(&engine.file, &engine.pyc);
+    }
+
+    /* Every ZIP-family container (also an APK, which additionally parses its
+     * AndroidManifest above) gets its central-directory record list and
+     * MANIFEST.MF read for the archive-record and manifest predicates. */
+    if ((engine.fileType == XFT_APK) || (engine.fileType == XFT_JAR) || (engine.fileType == XFT_ZIP) ||
+        (engine.fileType == XFT_NPM) || (engine.fileType == XFT_IPA)) {
+        engine.bHasZip = xzip_parse(&engine.file, &engine.zip);
+    }
+
+    if (engine.bHasPE) {
+        engine.pMap = &engine.pe.map;
+    } else {
+        xbmap_init(&binaryMap);
+        binaryMap.nBinarySize = engine.file.nSize;
+        binaryMap.fileType = engine.fileType;
+        binaryMap.nBits = 32;
+        xbmap_add(&binaryMap, 0, engine.file.nSize, 0, (cd_u64)engine.file.nSize, XPART_DATA, "Data");
+        engine.pMap = &binaryMap;
+    }
+
+    pResult->fileType = engine.fileType;
+
+    engine.pJs = js_new();
+    js_set_user(engine.pJs, &engine);
+    cdie_install_api(&engine);
+
+    /* Locate the global, per-format and (for a .NET PE) DOTNET _init scripts. */
+    {
+        int nCliInit = -1;
+
+        for (i = 0; i < pDb->nCount; i++) {
+            if (x_strcmp(pDb->pRecords[i].pName, "_init") != 0) {
+                continue;
+            }
+
+            if (pDb->pRecords[i].fileType == XFT_UNKNOWN) {
+                nGlobalInit = i;
+            }
+
+            if (pDb->pRecords[i].fileType == XFT_CLI_ASSEMBLY) {
+                nCliInit = i;
+            } else if (xft_check(pDb->pRecords[i].fileType, engine.fileType)) {
+                nTypeInit = i;
+            }
+        }
+
+        if (nGlobalInit >= 0) {
+            run_script(&engine, &pDb->pRecords[nGlobalInit], 0);
+        }
+
+        if (nTypeInit >= 0) {
+            run_script(&engine, &pDb->pRecords[nTypeInit], 0);
+        }
+
+        /* The DOTNET _init runs after the PE one, so it can build on it. */
+        if (engine.bIsCliAssembly && (nCliInit >= 0)) {
+            run_script(&engine, &pDb->pRecords[nCliInit], 0);
+        }
+    }
+
+    for (i = 0; (i < pDb->nCount) && (!engine.bStop); i++) {
+        if (should_execute(&pDb->pRecords[i], engine.fileType, engine.bIsCliAssembly, pOptions)) {
+            run_script(&engine, &pDb->pRecords[i], 1);
+        }
+    }
+
+    if (pResult->nCount == 0) {
+        ScanRecord *pRecord = NULL;
+
+        pResult->pRecords = (ScanRecord *)cd_calloc(1, sizeof(ScanRecord));
+        pResult->nCapacity = 1;
+        pRecord = &pResult->pRecords[0];
+        pRecord->pType = cd_strdup("Unknown");
+        pRecord->pName = cd_strdup("Unknown");
+        pRecord->pVersion = cd_strdup("");
+        pRecord->pInfo = cd_strdup("");
+        pRecord->nPrio = cdie_type_to_prio("Unknown");
+        pRecord->bIsUnknown = 1;
+        pResult->nCount = 1;
+    }
+
+    if (pOptions->bSort) {
+        stable_sort_records(pResult->pRecords, pResult->nCount);
+    }
+
+    js_free(engine.pJs);
+
+    for (i = 0; i < engine.nBlackListCount; i++) {
+        cd_free(engine.pBlackList[i].pType);
+        cd_free(engine.pBlackList[i].pName);
+    }
+
+    cd_free(engine.pBlackList);
+
+    if (engine.bHasPE) {
+        xpe_free(&engine.pe);
+    } else {
+        xbmap_free(&binaryMap);
+    }
+
+    if (engine.bHasJpeg) {
+        xjpeg_free(&engine.jpeg);
+    }
+
+    if (engine.bHasApk) {
+        xapk_free(&engine.apk);
+    }
+
+    if (engine.bHasPdf) {
+        xpdf_free(&engine.pdf);
+    }
+
+    if (engine.bHasElf) {
+        xelf_free(&engine.elf);
+    }
+
+    if (engine.bHasDex) {
+        xdex_free(&engine.dex);
+    }
+
+    if (engine.bHasMach) {
+        xmach_free(&engine.mach);
+    }
+
+    if (engine.bHasPyc) {
+        xpyc_free(&engine.pyc);
+    }
+
+    if (engine.bHasZip) {
+        xzip_free(&engine.zip);
+    }
+
+    xb_close(&engine.file);
+
+    return 1;
+}
+
+int cdie_scan_file(const char *pFileName, DBase *pDb, ScanOptions *pOptions, ScanResult *pResult)
+{
+    XBFile file;
+
+    x_memset(pResult, 0, sizeof(*pResult));
+
+    if (!xb_open(&file, pFileName)) {
+        return 0;
+    }
+
+    pResult->pFileName = cd_strdup(pFileName);
+    pResult->nFileSize = file.nSize;
+
+    return scan_engine_run(&file, pDb, pOptions, pResult);
+}
+
+int cdie_scan_memory(const void *pData, cd_i64 nSize, DBase *pDb, ScanOptions *pOptions, ScanResult *pResult)
+{
+    XBFile file;
+
+    x_memset(pResult, 0, sizeof(*pResult));
+    x_memset(&file, 0, sizeof(file));
+
+    if (nSize < 0) {
+        nSize = 0;
+    }
+
+    /* A private copy so xb_close can free it like a file-backed buffer. */
+    file.pData = (unsigned char *)cd_malloc((size_t)(nSize > 0 ? nSize : 1));
+
+    if (file.pData == NULL) {
+        return 0;
+    }
+
+    if (nSize > 0) {
+        x_memcpy(file.pData, pData, (size_t)nSize);
+    }
+
+    file.nSize = nSize;
+    file.pFileName = cd_strdup("");
+
+    pResult->pFileName = cd_strdup("");
+    pResult->nFileSize = nSize;
+
+    return scan_engine_run(&file, pDb, pOptions, pResult);
+}
