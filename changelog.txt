@@ -1,4 +1,7 @@
-1.0.0
+4.0.0
+    Version aligned with the Detect It Easy source (die_source 4.0.0), so
+    `cdie --version` reports the same number as `diec`.
+
     Initial release.
 
     * Pure C99 port of the Detect It Easy console scanner. No external
@@ -58,6 +61,11 @@
       Ubuntu release, the GNU note's "ABI: x.y.z" and the e_machine arch
       ("Ubuntu Linux(22.04.3, ABI: 3.2.0)[AMD64, 64-bit]", "Unix[MIPS,
       32-bit]"). All four match diec byte for byte.
+    * --verbose "Virtual machine" line for JAR: XJAR::getFileFormatInfo reads the
+      first *.class member (the one whose decompressed head carries the
+      0xCAFEBABE magic), maps its major/minor version to the Java release via
+      XJavaClass::_getJDKVersion, and reports "JVM(<release>)[Universal, Data]"
+      ("JVM(Java SE 8)[Universal, Data]"), matching diec byte for byte.
     * PYC parser: the two-byte magic maps to the interpreter release
       (getFileFormatVersion, so "Python Bytecode(3.13b1)"), and detection now
       requires size >= 12, the "\r\n" marker and a magic that is a *known*
@@ -109,10 +117,13 @@
       result set uses DiE's separate shape: no file-part wrapper, one bare
       record whose string is the file type.
     * Short options are diec's, which are not always the mnemonic letter:
-      -a is --alltypes, -p is --plaintext, -l is --profiling, -s is
-      --showdatabase, -u is --heuristicscan, -g is --aggressivecscan, -b is
-      --verbose, -U is --hideunknown, -M is --messages. The letters this port
-      used earlier still work as aliases where they do not collide.
+      -p is --plaintext, -l is --profiling, -s is --showdatabase, -u is
+      --heuristicscan, -g is --aggressivecscan, -b is --verbose, -U is
+      --hideunknown, -M is --messages. The letters this port used earlier still
+      work as aliases where they do not collide. The -a/--alltypes option was
+      dropped: the engine does not scan every matching type (diec lists them
+      all), so the flag was accepted but had no effect - it is now rejected
+      rather than silently ignored.
     * --verbose reproduces the "Operation system" line, including the version
       name table (Vista, 7, 8, 8.1, 10, ...), the 64-bit floor at Server 2003
       and the "<arch>, <mode>" suffix from the PE machine table.
@@ -131,6 +142,18 @@
       builds, installs and zips via CPack. The package bundles the signature
       database and the library artifacts, so the extracted folder runs with no
       arguments and can be linked against.
+    * Direct, CMake-free build scripts in run/, each producing the console
+      scanner AND the die_library artifacts. build_msvc.cmd emits the CRT-free
+      KERNEL32-only cdie.exe plus die.dll + die.lib (shared) and die_static.lib
+      (static), straight from cl (it loads vcvars itself). build_tcc.cmd /
+      build_tcc.sh compile the whole scanner and library with the Tiny C
+      Compiler (cdie.exe, die.dll + die.def / libdie.so, and libdie.a). Both
+      glob the ~33 sources under src/, so no file list is maintained by hand.
+      Two portability guards keep the TinyCC build working: the square-root path
+      avoids __builtin_sqrt (TinyCC may define __GNUC__ without it) and uses the
+      software Newton fallback; utils.c declares the code-page conversions that
+      TinyCC's <windows.h> omits; and die.h exports through __attribute__ rather
+      than __declspec under TinyCC. None of this affects the MSVC or GCC builds.
     * All C standard library calls go through x_ prefixed stubs in
       core/utils.h. core/utils.c, utils_fp.c, utils_math.c and utils_entry.c
       are the only translation units that see a platform header; FILE * never
