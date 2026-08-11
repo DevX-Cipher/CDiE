@@ -1,0 +1,100 @@
+name: cdie
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install required libs
+        run: |
+          sudo apt-get update
+          sudo apt-get install build-essential cmake -y
+
+      - name: Build cdie
+        run: |
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(nproc)
+          mv src/console/cdie src/console/cdie_linux
+
+      - name: Upload Linux Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Beta
+          draft: false
+          prerelease: true
+          files: build/src/console/cdie_linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build cdie
+        run: |
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          cmake --build . --config Release --parallel
+
+      - name: Upload Windows Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Beta
+          draft: false
+          prerelease: true
+          files: build/src/console/Release/cdie.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install required libs
+        run: |
+          brew update
+          brew install cmake
+
+      - name: Build cdie
+        run: |
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+          make -j$(sysctl -n hw.logicalcpu)
+          # Benennt die Datei direkt nach dem Kompilieren um
+          mv src/console/cdie src/console/cdie_macos
+
+      - name: Upload macOS Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: Beta
+          draft: false
+          prerelease: true
+          files: build/src/console/cdie_macos
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
