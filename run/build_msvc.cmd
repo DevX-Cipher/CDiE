@@ -19,16 +19,34 @@ set "OUT=%ROOT%\build_msvc"
 rem --- Visual Studio x64 environment -----------------------------------------
 if not defined VSCMD_VER (
     if not defined VCVARS (
-        for %%E in (Enterprise Professional Community BuildTools) do (
-            if exist "%ProgramFiles%\Microsoft Visual Studio\2022\%%E\VC\Auxiliary\Build\vcvars64.bat" (
-                set "VCVARS=%ProgramFiles%\Microsoft Visual Studio\2022\%%E\VC\Auxiliary\Build\vcvars64.bat"
+        set "VSVARS_PATH="
+
+        for /f "tokens=*" %%a in ('
+            reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall" /s /f "Visual Studio" ^|
+            findstr "HKEY"
+        ') do (
+            for /f "tokens=2*" %%b in ('
+                reg query "%%a" /v InstallLocation 2^>nul ^|
+                findstr /i "InstallLocation"
+            ') do (
+                if not "%%c"=="" (
+                    if exist "%%c\VC\Auxiliary\Build\vcvars64.bat" (
+                        set "VSVARS_PATH=%%c\VC\Auxiliary\Build\vcvars64.bat"
+                        goto :found_vs
+                    )
+                )
             )
         )
+
+        :found_vs
+        if not defined VSVARS_PATH (
+            echo ERROR: Visual Studio not found.
+            exit /b 1
+        )
+
+        set "VCVARS=%VSVARS_PATH%"
     )
-    if not defined VCVARS (
-        echo Could not find vcvars64.bat. Set VCVARS to its path and retry.
-        exit /b 1
-    )
+
     call "!VCVARS!" >nul
 )
 
