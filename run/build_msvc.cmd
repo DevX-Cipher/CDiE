@@ -66,32 +66,30 @@ for /r "%SRC%" %%f in (*.c) do (
 )
 set "LIB_SOURCES=!LIB_SOURCES! "%ROOT%\lib\die.c""
 
-set "CRTDEF=-D_CRT_SECURE_NO_WARNINGS -D_CRT_NONSTDC_NO_DEPRECATE"
-
 rem --- 1. cdie.exe (CRT-free, KERNEL32 only) ---------------------------------
 echo [1/3] cdie.exe (CRT-free, KERNEL32 only)...
 if not exist "%OUT%\obj_exe" mkdir "%OUT%\obj_exe"
-cl /nologo /O2 /W3 /GS- /DNDEBUG -DCDIE_NO_CRT %CRTDEF% -I"%SRC%" ^
+cl /nologo /O2 /W3 /GS- /DNDEBUG -DCDIE_NO_CRT -I"%SRC%" ^
    !EXE_SOURCES! /Fe:"%OUT%\cdie.exe" /Fo:"%OUT%\obj_exe\\" ^
    /link /NODEFAULTLIB /ENTRY:x_entry_point /SUBSYSTEM:CONSOLE kernel32.lib
 if errorlevel 1 ( echo BUILD FAILED ^(cdie.exe^) & exit /b 1 )
 
-rem --- 2. die_static.lib (static, /MD, DIE_STATIC) ---------------------------
-echo [2/3] die_static.lib (static library)...
+rem --- 2. die_static.lib (static, CRT-free, DIE_STATIC) ----------------------
+echo [2/3] die_static.lib (static library, CRT-free)...
 if not exist "%OUT%\obj_static" mkdir "%OUT%\obj_static"
-cl /nologo /O2 /W3 /MD /DNDEBUG -DDIE_STATIC %CRTDEF% -I"%SRC%" -I"%ROOT%\lib" ^
+cl /nologo /O2 /W3 /Zl /GS- /kernel /GR- /EHsc- /DNDEBUG -DDIE_STATIC -I"%SRC%" -I"%ROOT%\lib" ^
    /c !LIB_SOURCES! /Fo"%OUT%\obj_static\\"
 if errorlevel 1 ( echo BUILD FAILED ^(die_static compile^) & exit /b 1 )
 lib /nologo /OUT:"%OUT%\die_static.lib" "%OUT%\obj_static\*.obj"
 if errorlevel 1 ( echo BUILD FAILED ^(die_static.lib^) & exit /b 1 )
 
-rem --- 3. die.dll + die.lib (shared, /MD, DIE_BUILD_SHARED) ------------------
-echo [3/3] die.dll + die.lib (shared library)...
+rem --- 3. die.dll + die.lib (shared, CRT-free, DIE_BUILD_SHARED) -------------
+echo [3/3] die.dll + die.lib (shared library, CRT-free)...
 if not exist "%OUT%\obj_shared" mkdir "%OUT%\obj_shared"
-cl /nologo /O2 /W3 /MD /DNDEBUG -DDIE_BUILD_SHARED %CRTDEF% -I"%SRC%" -I"%ROOT%\lib" ^
+cl /nologo /O2 /W3 /Zl /GS- /kernel /GR- /EHsc- /DNDEBUG -DDIE_BUILD_SHARED -I"%SRC%" -I"%ROOT%\lib" ^
    /c !LIB_SOURCES! /Fo"%OUT%\obj_shared\\"
 if errorlevel 1 ( echo BUILD FAILED ^(die_shared compile^) & exit /b 1 )
-link /nologo /DLL /OUT:"%OUT%\die.dll" /IMPLIB:"%OUT%\die.lib" ^
+link /nologo /DLL /NODEFAULTLIB /ENTRY:DllMain /OUT:"%OUT%\die.dll" /IMPLIB:"%OUT%\die.lib" ^
    "%OUT%\obj_shared\*.obj" kernel32.lib
 if errorlevel 1 ( echo BUILD FAILED ^(die.dll^) & exit /b 1 )
 
