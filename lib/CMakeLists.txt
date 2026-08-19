@@ -42,17 +42,16 @@ endif()
 
 if (MSVC)
     if(DIE_BUILD_STATIC)
-        # STATIC LIB (die_static.lib) — CRT-free
         target_compile_options(die_static PRIVATE
-            /GS-        # disable security cookie
-            /Zl         # no default library name
-            /kernel     # kernel-mode style, removes CRT
-            /GR-        # no RTTI
-            /EHsc-      # no exceptions
-            /DNDEBUG    # no debug runtime
+            /GS-        
+            /Zl        
+            /kernel     
+            /GR-        
+            /EHsc-      
+            /DNDEBUG    
         )
         target_link_options(die_static PRIVATE
-            /NODEFAULTLIB   # do NOT link CRT
+            /NODEFAULTLIB   
         )
     endif()
 endif()
