@@ -55,7 +55,7 @@ jobs:
           mkdir build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release ..
-          cmake --build . --config Release --parallel
+          cmake --build . --config Release
 
       - name: Upload Windows Release
         if: github.event_name != 'pull_request'
