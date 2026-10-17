@@ -26,7 +26,7 @@
  * This translation unit deliberately does NOT include <windows.h>: it speaks to
  * the engine only. main_gui.c is the half that speaks Win32. */
 
-#include "gui_backend.h"
+#include "core/gui_backend.h"
 
 #include "../global.h"
 #include <xxfclib/die_engine/die_engine.h>
