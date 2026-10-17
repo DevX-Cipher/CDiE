@@ -112,3 +112,4 @@ echo "[1/1] cdie_gui ($CC, ${#SOURCES[@]} sources)..."
 
 echo
 echo "Built: $OUT/cdie_gui"
+./build_linux/cdie_gui
