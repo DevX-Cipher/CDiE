@@ -1,5 +1,6 @@
 #include <gtk/gtk.h>
 #include <glib/gstdio.h>
+#include "global.h"
 #include "theme/theme.h"
 #include "controls/sidebar.h"
 #include "panels/header.h"
@@ -123,7 +124,7 @@ int gui_run(void)
 
   win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   g_win = win;
-  gtk_window_set_title(GTK_WINDOW(win), "cdie");
+  gtk_window_set_title(GTK_WINDOW(win), "Detect It Easy v" X_APPLICATIONVERSION);
   gtk_window_set_default_size(GTK_WINDOW(win), 1150, 700);
   g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
