@@ -136,18 +136,25 @@ void __cdecl x_gui_entry_point(void)
     gui_startup();
 }
 
-#else /* hosted build: a normal WinMain forwards to gui_run */
+#elif defined(_WIN32) /* hosted build: a normal WinMain forwards to gui_run */
 
 #include <windows.h>
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
-    (void)hInstance;
-    (void)hPrevInstance;
-    (void)lpCmdLine;
-    (void)nShowCmd;
+  (void)hInstance;
+  (void)hPrevInstance;
+  (void)lpCmdLine;
+  (void)nShowCmd;
 
-    return gui_run();
+  return gui_run();
+}
+
+#else /* Linux / other: plain main */
+
+int main(void)
+{
+  return gui_run();
 }
 
 #endif

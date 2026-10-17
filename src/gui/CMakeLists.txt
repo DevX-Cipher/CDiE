@@ -13,16 +13,55 @@ if(NOT TARGET xxwidgets::xxwidgets)
     add_subdirectory("${CDIE_XXWIDGETS_DIR}" "${CMAKE_BINARY_DIR}/xxwidgets" EXCLUDE_FROM_ALL)
 endif()
 
+# WIN32 only affects Windows builds; it is ignored elsewhere.
 add_executable(cdie_gui WIN32
     ${CDIE_LIB_SOURCES}
-    ${CMAKE_CURRENT_LIST_DIR}/gui_backend.c
-    ${CMAKE_CURRENT_LIST_DIR}/main_gui.c
-    ${CMAKE_CURRENT_LIST_DIR}/gui_entry.c
-    ${CMAKE_CURRENT_LIST_DIR}/cdie_gui.rc
+    ${CMAKE_CURRENT_LIST_DIR}/core/gui_backend.c
+    ${CMAKE_CURRENT_LIST_DIR}/core/gui_entry.c
 )
-target_include_directories(cdie_gui PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets
-    user32 gdi32 comdlg32 comctl32 shell32 ole32)
+
+if(WIN32)
+    target_sources(cdie_gui PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/main_gui.c
+        ${CMAKE_CURRENT_LIST_DIR}/panels/header.c
+        ${CMAKE_CURRENT_LIST_DIR}/panels/infobar.c)
+else()
+    target_sources(cdie_gui PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/main_gui_gtk.c)
+endif()
+
+# Platform-neutral controls (they call into the pl_* layer).
+target_sources(cdie_gui PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/controls/sidebar.c
+    ${CMAKE_CURRENT_LIST_DIR}/controls/tabbar.c
+    ${CMAKE_CURRENT_LIST_DIR}/controls/bottombar.c)
+
+target_include_directories(cdie_gui PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/..
+    ${CMAKE_CURRENT_LIST_DIR}
+    ${CMAKE_CURRENT_LIST_DIR}/resource)
+
+target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets)
+
+if(WIN32)
+    target_sources(cdie_gui PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/platform/platform_win32.c
+        ${CMAKE_CURRENT_LIST_DIR}/resource/cdie_gui.rc)
+    target_link_libraries(cdie_gui PRIVATE
+        user32 gdi32 comdlg32 comctl32 shell32 ole32 advapi32 dwmapi)
+elseif(APPLE)
+    enable_language(OBJC)
+    target_sources(cdie_gui PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/platform/platform_cocoa.m)
+    target_compile_options(cdie_gui PRIVATE -fobjc-arc)
+    target_link_libraries(cdie_gui PRIVATE "-framework Cocoa")
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+    target_sources(cdie_gui PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/platform/platform_gtk.c)
+    target_link_libraries(cdie_gui PRIVATE PkgConfig::GTK3)
+endif()
 
 if(MSVC)
     # The application resource owns the common-controls and DPI manifest.
