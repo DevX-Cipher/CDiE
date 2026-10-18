@@ -1025,7 +1025,7 @@ static void layout(void)
     /*if (g_tabbar) {
       pl_widget_set_rect(tabbar_widget(g_tabbar), cx, cy, cw, TABBAR_H);
       cy += TABBAR_H;
-    */}
+    }*/
     if (g_bottombar)
       pl_widget_set_rect(bottombar_widget(g_bottombar),
         cx, H - BOTTOMBAR_H, cw, BOTTOMBAR_H);
