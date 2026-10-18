@@ -101,7 +101,7 @@ static xxwidgets_about_dialog *g_about;
 static Sidebar* g_sidebar;
 static Header* g_header_wnd;
 static Infobar* g_infobar_wnd;
-static Tabbar* g_tabbar;
+//static Tabbar* g_tabbar;
 static Bottombar* g_bottombar;
 
 static int  g_running, g_pending;
@@ -1022,10 +1022,10 @@ static void layout(void)
       pl_widget_set_rect(infobar_widget(g_infobar_wnd), cx, cy, cw, INFOBAR_H);
       cy += INFOBAR_H;
     }
-    if (g_tabbar) {
+    /*if (g_tabbar) {
       pl_widget_set_rect(tabbar_widget(g_tabbar), cx, cy, cw, TABBAR_H);
       cy += TABBAR_H;
-    }
+    */}
     if (g_bottombar)
       pl_widget_set_rect(bottombar_widget(g_bottombar),
         cx, H - BOTTOMBAR_H, cw, BOTTOMBAR_H);
@@ -1093,29 +1093,23 @@ static void on_nav(void* user, int nav_id)
 {
   (void)user;
   switch (nav_id) {
-  case NAV_OPTIONS:    g_pending = ACTION_OPTIONS; break;
-  case NAV_SIGNATURES: g_pending = ACTION_OPTIONS; break;
-  default: break;
+  case NAV_OPTIONS:
+    g_pending = ACTION_OPTIONS;
+    break;
+
+  case NAV_SIGNATURES:
+    break;
+
+  default:
+    break;
   }
 }
 
 static void on_tab(void* user, int tab_id)
 {
   (void)user;
-  if (tab_id == TAB_SCAN && g_tabbar)
-    tabbar_set_active(g_tabbar, TAB_SCAN);
-}
-
-static void on_bottom(void* user, int button_id)
-{
-  (void)user;
-  switch (button_id) {
-  case BB_RUN_SCAN:   g_pending = ACTION_SCAN;           break;
-  case BB_SIGNATURES: g_pending = ACTION_OPTIONS;        break;
-  case BB_FLAGS:      g_pending = ACTION_OPTIONS;        break;
-  case BB_DATABASE:   g_pending = ACTION_DATABASE_PATHS; break;
-  default: break;
-  }
+  //if (tab_id == TAB_SCAN && g_tabbar)
+  //  tabbar_set_active(g_tabbar, TAB_SCAN);
 }
 
 static LRESULT CALLBACK window_subclass(HWND handle, UINT message,
@@ -1207,7 +1201,6 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event,
     }
 }
 
-/* ── Control creation ────────────────────────────────────────────────── */
 static int create_control(xxwidgets_widget **control, xxwidgets_kind kind,
                           const char *text, int id)
 {
@@ -1217,6 +1210,21 @@ static int create_control(xxwidgets_widget **control, xxwidgets_kind kind,
     if (status != XXWIDGETS_OK) return 0;
     if (id) SetWindowLongPtrW(native(*control), GWLP_ID, id);
     return 1;
+}
+
+static LRESULT CALLBACK status_subclass(HWND handle, UINT message, WPARAM wp, LPARAM lp,
+  UINT_PTR subclass_id, DWORD_PTR reference)
+{
+  (void)subclass_id; (void)reference;
+  if (message == WM_SETTEXT && g_bottombar) {
+    char* utf8 = wide_to_utf8((const WCHAR*)lp);
+    if (utf8) {
+      bottombar_set_status(g_bottombar, utf8);
+      HeapFree(GetProcessHeap(), 0, utf8);
+    }
+  }
+  if (message == WM_NCDESTROY) RemoveWindowSubclass(handle, status_subclass, 3);
+  return DefSubclassProc(handle, message, wp, lp);
 }
 
 static int create_controls(void)
@@ -1290,17 +1298,18 @@ static int create_controls(void)
     g_header_wnd = header_create(native(g_window), SIDEBAR_W, 0, 800, HEADER_H,
       on_browse, NULL);
     g_infobar_wnd = infobar_create(native(g_window), SIDEBAR_W, HEADER_H, 800, INFOBAR_H);
-    g_tabbar = tabbar_create(native(g_window), SIDEBAR_W, HEADER_H + INFOBAR_H, 800, TABBAR_H, on_tab, NULL);
-    g_bottombar = bottombar_create(native(g_window), SIDEBAR_W, 500, 800, BOTTOMBAR_H, on_bottom, NULL);
+    //g_tabbar = tabbar_create(native(g_window), SIDEBAR_W, HEADER_H + INFOBAR_H, 800, TABBAR_H, on_tab, NULL);
+    g_bottombar = bottombar_create(native(g_window), SIDEBAR_W, 500, 800, BOTTOMBAR_H, NULL, NULL);
+    SetWindowSubclass(native(g_status), status_subclass, 3, 0);
 
-    if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || !g_tabbar || !g_bottombar) {
+    if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || /*!g_tabbar ||*/ !g_bottombar) {
       WCHAR msg[200];
       wsprintfW(msg,
         L"Chrome creation failed (1 = ok):\nsidebar=%d header=%d infobar=%d "
         L"tabbar=%d bottombar=%d\nGetLastError=%lu",
         g_sidebar != NULL, g_header_wnd != NULL, g_infobar_wnd != NULL,
-        g_tabbar != NULL, g_bottombar != NULL, GetLastError());
-      MessageBoxW(NULL, msg, L"cdie", MB_ICONERROR);
+        /*g_tabbar != NULL,*/ g_bottombar != NULL, GetLastError());
+     MessageBoxW(NULL, msg, L"cdie", MB_ICONERROR);
       return 0;
     }
     return 1;
@@ -1675,9 +1684,8 @@ int gui_run(void)
     SetWindowPos(native(g_window), NULL, 0, 0, 1150, 700, SWP_NOMOVE | SWP_NOZORDER);
 
     if (gui_backend_init()) {
-        wsprintfW(ready,
-            L"Ready. %d signatures loaded. Drop a file or press \u2022\u2022\u2022 to browse.",
-            gui_backend_signature_count());
+      wsprintfW(ready, L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan.",
+        gui_backend_signature_count());
         set_status_wide(ready);
     } else {
         xxwidgets_widget_set_text(g_status,
