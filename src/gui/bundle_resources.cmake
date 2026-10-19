@@ -1,0 +1,19 @@
+file(MAKE_DIRECTORY "${RESOURCES_DIR}")
+file(COPY "${CDIE_SOURCE_DIR}/LICENSE" DESTINATION "${RESOURCES_DIR}")
+if(EXISTS "${CDISASM_DIR}/LICENSE")
+    foreach(notice LICENSE THIRD_PARTY_NOTICES.md LICENSES)
+        if(EXISTS "${CDISASM_DIR}/${notice}")
+            file(COPY "${CDISASM_DIR}/${notice}" DESTINATION "${RESOURCES_DIR}/licenses/cdisasm")
+        endif()
+    endforeach()
+endif()
+if(DATABASE_DIR AND NOT DATABASE_DIR STREQUAL "NONE")
+    foreach(database db db_extra db_custom)
+        if(IS_DIRECTORY "${DATABASE_DIR}/${database}")
+            file(COPY "${DATABASE_DIR}/${database}" DESTINATION "${RESOURCES_DIR}"
+                PATTERN ".vscode" EXCLUDE
+                PATTERN "_ai_provenance" EXCLUDE
+                PATTERN ".git*" EXCLUDE)
+        endif()
+    endforeach()
+endif()
