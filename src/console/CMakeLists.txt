@@ -13,12 +13,12 @@ target_link_libraries(cdie PRIVATE xxfclib::die_engine)
 #
 # With CDIE_NO_CRT the binary links against KERNEL32 alone: no msvcrt, no
 # vcruntime, no api-ms-win-crt-*. The entry point becomes x_entry_point in
-# core/utils_entry.c, which builds argv from GetCommandLineA and calls
+# core/utils_entry.c, which builds argv from GetCommandLineW and calls
 # x_main().
 #
 # x86 additionally needs the compiler's 64-bit arithmetic helpers (_alldiv,
 # _allshr and friends) which live in libcmt, so the option defaults to ON
-# only for 64 bit MSVC builds.
+# only for MSVC x64 and ARM64 builds.
 
 # CDIE_NO_CRT is declared at the top level, where it also decides how the
 # die_engine archive is compiled. Here it is only consumed.
@@ -28,9 +28,13 @@ if(CDIE_NO_CRT AND MSVC)
 
     target_compile_options(cdie PRIVATE
         /GS-  # no stack security cookie (__security_check_cookie)
+        /sdl- # keep SDL from re-enabling the security-cookie instrumentation
         /GL-  # keep whole program optimisation from pulling in helpers
     )
 
+    if(POLICY CMP0184)
+        set_property(TARGET cdie PROPERTY MSVC_RUNTIME_CHECKS "")
+    endif()
     target_link_options(cdie PRIVATE
         /NODEFAULTLIB
         /ENTRY:x_entry_point
@@ -40,6 +44,9 @@ if(CDIE_NO_CRT AND MSVC)
     )
 
     target_link_libraries(cdie PRIVATE kernel32.lib)
+    if(TARGET xxfclib::no_crt_runtime)
+        target_link_libraries(cdie PRIVATE xxfclib::no_crt_runtime)
+    endif()
 
     message(STATUS "cdie: CRT-free build, KERNEL32 import only")
 endif()

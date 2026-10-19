@@ -63,50 +63,50 @@ static int g_bDbLoaded = 0;
  * setScanFlags. Note that result sorting is gated on SF_SORT, so the default
  * (no SF_SORT) leaves results in signature-priority order, exactly as
  * die_library does. */
-static void die_options_from_flags(ScanOptions *pOptions, unsigned int nFlags)
+static void die_options_from_flags(xx_scan_options *pOptions, unsigned int nFlags)
 {
-    scan_options_init(pOptions);
+    xx_scan_options_init(pOptions);
 
     /* getDefaultOptions sets only show type/version/info; it does not enable
      * the extra/custom databases or the default sort that the console does. */
-    pOptions->bUseExtraDatabase = 0;
-    pOptions->bUseCustomDatabase = 0;
-    pOptions->bSort = (nFlags & SF_SORT) ? 1 : 0;
+    pOptions->use_extra_database = 0;
+    pOptions->use_custom_database = 0;
+    pOptions->sort = (nFlags & SF_SORT) ? 1 : 0;
 
-    pOptions->bDeepScan = (nFlags & SF_DEEPSCAN) ? 1 : 0;
-    pOptions->bHeuristicScan = (nFlags & SF_HEURISTICSCAN) ? 1 : 0;
-    pOptions->bAllTypesScan = (nFlags & SF_ALLTYPESSCAN) ? 1 : 0;
-    pOptions->bRecursiveScan = (nFlags & SF_RECURSIVESCAN) ? 1 : 0;
-    pOptions->bVerbose = (nFlags & SF_VERBOSE) ? 1 : 0;
-    pOptions->bAggressiveScan = (nFlags & SF_AGGRESSIVESCAN) ? 1 : 0;
-    pOptions->bHideUnknown = (nFlags & SF_HIDEUNKNOWN) ? 1 : 0;
-    pOptions->bFormatResult = (nFlags & SF_FORMATRESULT) ? 1 : 0;
-    pOptions->bResultAsJSON = (nFlags & SF_RESULTASJSON) ? 1 : 0;
-    pOptions->bResultAsXML = (nFlags & SF_RESULTASXML) ? 1 : 0;
-    pOptions->bResultAsCSV = (nFlags & SF_RESULTASCSV) ? 1 : 0;
-    pOptions->bResultAsTSV = (nFlags & SF_RESULTASTSV) ? 1 : 0;
+    pOptions->deep_scan = (nFlags & SF_DEEPSCAN) ? 1 : 0;
+    pOptions->heuristic_scan = (nFlags & SF_HEURISTICSCAN) ? 1 : 0;
+    pOptions->all_types_scan = (nFlags & SF_ALLTYPESSCAN) ? 1 : 0;
+    pOptions->recursive_scan = (nFlags & SF_RECURSIVESCAN) ? 1 : 0;
+    pOptions->verbose = (nFlags & SF_VERBOSE) ? 1 : 0;
+    pOptions->aggressive_scan = (nFlags & SF_AGGRESSIVESCAN) ? 1 : 0;
+    pOptions->hide_unknown = (nFlags & SF_HIDEUNKNOWN) ? 1 : 0;
+    pOptions->format_result = (nFlags & SF_FORMATRESULT) ? 1 : 0;
+    pOptions->result_as_json = (nFlags & SF_RESULTASJSON) ? 1 : 0;
+    pOptions->result_as_xml = (nFlags & SF_RESULTASXML) ? 1 : 0;
+    pOptions->result_as_csv = (nFlags & SF_RESULTASCSV) ? 1 : 0;
+    pOptions->result_as_tsv = (nFlags & SF_RESULTASTSV) ? 1 : 0;
 }
 
 /* Formats a result the same way the console (and ScanItemModel) does. */
-static char *die_format(ScanResult *pResult, ScanOptions *pOptions)
+static char *die_format(xx_scan_result *pResult, xx_scan_options *pOptions)
 {
-    if (pOptions->bResultAsJSON) {
-        return die_engine_format_json(pResult, pOptions);
+    if (pOptions->result_as_json) {
+        return xx_scan_format_json(pResult, pOptions);
     }
 
-    if (pOptions->bResultAsXML) {
-        return die_engine_format_xml(pResult, pOptions);
+    if (pOptions->result_as_xml) {
+        return xx_scan_format_xml(pResult, pOptions);
     }
 
-    if (pOptions->bResultAsCSV) {
-        return die_engine_format_csv(pResult, pOptions, ';');
+    if (pOptions->result_as_csv) {
+        return xx_scan_format_csv(pResult, pOptions, ';');
     }
 
-    if (pOptions->bResultAsTSV) {
-        return die_engine_format_csv(pResult, pOptions, '\t');
+    if (pOptions->result_as_tsv) {
+        return xx_scan_format_csv(pResult, pOptions, '\t');
     }
 
-    return die_engine_format_text(pResult, pOptions);
+    return xx_scan_format_text(pResult, pOptions);
 }
 
 /* Resolves a database path, replacing a leading "$data" token with the
@@ -329,8 +329,8 @@ static wchar_t *die_dup_result_w(const char *pUtf8)
 static char *die_scan_common(int bFileMode, const char *pFileName, const void *pMemory, int nMemorySize, unsigned int nFlags, const char *pDatabasePath,
                              DBase *pPreloaded)
 {
-    ScanOptions options;
-    ScanResult result;
+    xx_scan_options options;
+    xx_scan_result result;
     DBase localDb;
     DBase *pDb = pPreloaded;
     char *pFormatted = NULL;
@@ -363,7 +363,7 @@ static char *die_scan_common(int bFileMode, const char *pFileName, const void *p
         pFormatted = die_format(&result, &options);
         pResultString = die_dup_result(pFormatted);
         xx_rt_free(pFormatted);
-        scan_result_free(&result);
+        xx_scan_result_free(&result);
     } else {
         pResultString = cdie_strdup("");
     }
@@ -372,7 +372,7 @@ static char *die_scan_common(int bFileMode, const char *pFileName, const void *p
         db_free(&localDb);
     }
 
-    scan_options_free(&options);
+    xx_scan_options_free(&options);
 
     return pResultString;
 }

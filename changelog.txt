@@ -4,6 +4,25 @@
 
     Initial release.
 
+    * Added PE.validateAmd64Unwind, a native implementation of the generic
+      heuristic's AMD64 exception-table checks. The database retains its
+      JavaScript fallback when the extension is missing or unavailable.
+    * GUI file drops now use xxwidgets' shared native drop event on macOS and
+      Windows, including over the result tree and active path field.
+    * Console scan results now use the shared XScanEngine category colors,
+      including malware backgrounds, with ANSI and native Windows support.
+      --nocolor, redirected output and structured formats remain plain.
+    * Native MSVC ARM64 now supports the CRT-free console runtime, including
+      stack probing and the compiler's out-of-line interlocked helpers.
+    * Added hardware-gated Arm NEON, CRC32, AES/SHA crypto and Dot Product
+      preferences to xxfclib, the console command line and the GUI optimization
+      dialog. The Arm dialog hides all six x86 controls, and the x86/x64 dialog
+      hides all four Arm controls. These switches reserve
+      the runtime controls for future optimized algorithms; the current
+      algorithms do not consume them yet.
+    * Added a Defaults button to the GUI optimization dialog. It restores both
+      buffers to 64 KiB and enables every acceleration option supported by the
+      current CPU and operating system before the user chooses OK.
     * Pure C99 port of the Detect It Easy console scanner. No external
       dependencies.
     * Embedded JavaScript engine (ES5 subset): lexer, parser, tree-walking
@@ -101,7 +120,7 @@
     * Windows file and directory I/O uses the wide APIs (CreateFileW,
       GetFileAttributesW, FindFirstFileW, GetCommandLineW) with UTF-8 <-> UTF-16
       conversion at the boundary, so non-ANSI paths (e.g. a Cyrillic file name)
-      open. The executable still imports KERNEL32 only, now 23 functions.
+      open. The executable still imports KERNEL32 only.
     * DIE signature engine: full signature syntax ('text', .., **, %%, %&,
       !%, _%, $$, ##, ++), memory maps, RVA/VA translation.
     * Script API: ~200 Binary/PE/MSDOS methods plus the global helpers
@@ -180,8 +199,8 @@
       signature database.
     * CRT-free link on 64 bit MSVC (option CDIE_NO_CRT, default ON):
       /NODEFAULTLIB with entry point x_entry_point, which builds argv from
-      GetCommandLineW and calls x_main. The resulting executable imports
-      23 functions from KERNEL32.dll and nothing else.
+      GetCommandLineW and calls x_main. The resulting executable imports only
+      KERNEL32.dll.
     * Own floating point conversions in core/utils_fp.c, exact via a small
       bignum: correctly rounded x_strtod (normals and subnormals), shortest
       round-trip x_dtoa_shortest (Steele & White) and the counted-digit

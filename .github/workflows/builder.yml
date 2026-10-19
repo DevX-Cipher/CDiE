@@ -134,6 +134,14 @@ jobs:
           path: cdie/dep/cdisasm
           token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
           persist-credentials: false
+      - name: Check out xxwidgets
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxwidgets
+          ref: ${{ needs.resolve-deps.outputs.xxwidgets }}
+          path: cdie/dep/xxwidgets
+          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+          persist-credentials: false
       - name: Check out signature database
         uses: actions/checkout@v4
         with:
@@ -166,6 +174,9 @@ jobs:
           unzip -q "$archive" -d "$extract_dir"
           package_dir="$extract_dir/cdie_mac_arm64_portable_${version}"
           test -x "$package_dir/cdie"
+          test -x "$package_dir/cdie_gui.app/Contents/MacOS/cdie_gui"
+          plutil -lint "$package_dir/cdie_gui.app/Contents/Info.plist"
+          test -n "$(find "$package_dir/cdie_gui.app/Contents/Resources/db" -type f -print -quit)"
           test -n "$(find "$package_dir/db" -type f -print -quit)"
 
           smoke_dir=$(mktemp -d)

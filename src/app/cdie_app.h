@@ -34,7 +34,7 @@
  *
  * ONE ALLOCATOR. Everything cdie allocates, and everything the engine hands
  * back, is an xx_rt_malloc block released with xx_rt_free. That is not a free
- * choice: die_engine_format_text() and friends return cd_malloc blocks, and
+ * choice: xx_scan_format_text() and friends return cd_malloc blocks, and
  * cd_malloc is xx_rt_malloc. xxfclib's other public string and path helpers
  * (xx_str_dup, xx_fs_path_dir, ...) allocate through xx_mem_alloc instead,
  * whose documented release is xx_mem_free. The two happen to be the same heap

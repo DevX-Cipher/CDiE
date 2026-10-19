@@ -6,6 +6,14 @@ and results), `DiE_Script`/`DiE_ScriptEngine` (script driving) and
 `QtScript`/`QJSEngine` (JavaScript). This port keeps the same separation but
 implements every layer in C99.
 
+The shared implementation lives in xxfclib. `die_engine_init()` installs its
+signature scanner as an `xx_scan_engine`, borrowing the loaded database.
+Native clients call `xx_scan_file`, `xx_scan_device`, or `xx_scan_memory` and
+release returned results through `xx_scan_free_result()` before engine
+cleanup. The console, GUI, and DIE library retain the `die_engine_scan_*`
+compatibility wrappers, which transfer results into caller-owned
+`xx_scan_result` storage released with `xx_scan_result_free()`.
+
 Every layer reaches the runtime only through `core/utils.h` (the `x_` stubs).
 On Windows those stubs are implemented on Win32 alone, so the shipped
 executable imports nothing but `KERNEL32.dll` — see
@@ -15,17 +23,23 @@ executable imports nothing but `KERNEL32.dll` — see
                      ┌──────────────────────────────┐
    command line  ──▶ │ console/main_console.c        │
                      └───────────────┬──────────────┘
-                                     │ ScanOptions
+                                     │ xx_scan_options
                      ┌───────────────▼──────────────┐
-                     │ engine/scan.c                 │  file type dispatch,
-                     │   cdie_scan_file()            │  _init + detect loop
+                     │ die_engine/                  │  compatibility entry,
+                     │   xx_die_engine_legacy.c     │  caller-owned results
                      └──┬──────────┬────────────┬────┘
                         │          │            │
         ┌───────────────▼──┐  ┌────▼───────┐  ┌─▼──────────────┐
-        │ engine/db.c      │  │ engine/    │  │ engine/        │
-        │ signature        │  │ api.c      │  │ result.c       │
-        │ database         │  │ script API │  │ formatting     │
+        │ scan/            │  │ die_engine/│  │ scan/          │
+        │ xx_scan_db.c     │  │ engine.c   │  │ xx_scan_result.c│
+        │ database         │  │ callbacks  │  │ formatting     │
         └──────────────────┘  └────┬───────┘  └────────────────┘
+                                   │
+                    ┌──────────────▼───────────────┐
+                    │ xx_die_engine_scan.c          │
+                    │ xx_die_engine_api.c           │
+                    │ _init + detect, script API    │
+                    └──────────────┬───────────────┘
                                    │
                     ┌──────────────▼───────────────┐
                     │ js/  JavaScript engine        │
@@ -167,23 +181,43 @@ executable imports nothing but `KERNEL32.dll` — see
 
 See [JS_ENGINE.md](JS_ENGINE.md).
 
-### `engine/`
+### xxfclib `scan/` and `die_engine/`
 
-* `db.c` — walks the database directory tree, maps each subdirectory to a file
+* `scan/xx_scan_db.c` — walks the database directory tree, maps each subdirectory to a file
   type, reads every `*.sg` (or extension-less) file and sorts each database by
   `(file type, priority digit, name)`.
-* `api.c` — installs the script API. A single dispatcher function keyed by an
+* `die_engine/xx_die_engine_engine.c` — installs the native `xx_scan_engine`
+  callbacks through `die_engine_init()`. It borrows the database, bounds each
+  selected input range, maps native file types to signature types, and owns
+  callback results until their engine free callback is called.
+* `scan/xx_scan_engine.c` — common detection, callback dispatch, parent-format
+  passes, overlay scans, and result merging for native `xx_scan_*` callers.
+* `die_engine/xx_die_engine_legacy.c` — compatibility wrappers for existing
+  callers. Default automatic scans preserve the Binary/COM fallback passes;
+  explicit file types run one interpretation. Parent-format or overlay flags
+  route through the common scanner. The device wrapper restores the borrowed
+  cursor, and memory scanning borrows the input until the synchronous call
+  returns. Directory recursion remains the console's responsibility.
+* `die_engine/xx_die_engine_api.c` — installs the script API. A single dispatcher function keyed by an
   enum implements ~200 methods on the `Binary`/`PE`/`MSDOS` object plus the
   global helpers (`_setResult`, `_isResultPresent`, `_removeResult`,
   `includeScript`, …). It also carries the two lookup tables behind the
   `--verbose` "Operation system" line: the Windows version names and the
   `IMAGE_FILE_HEADER` machine names.
-* `scan.c` — the scan driver, mirroring `DiE_Script::processDetect`.
-* `result.c` — type priorities, the type-name table and the
+* `die_engine/xx_die_engine_scan.c` — the signature pass driver, mirroring
+  `DiE_Script::processDetect`. It connects progress and cooperative cancellation
+  to script boundaries and the `_isStop()` script helper.
+* `scan/xx_scan_result.c` — type priorities, the type-name table and the
   text/JSON/XML/CSV/TSV formatters. Each reproduces the corresponding DiE
   output exactly, which for the structured ones means matching quirks of the
   Qt classes that produced them — `QJsonObject` orders keys alphabetically,
   and `QXmlStreamWriter` opens with a blank line.
+  `xx_scan_print_text` reuses the same record formatter while writing colored
+  spans to the terminal. Category colors come from `scan/xx_scan_color.c`;
+  `terminal/xx_terminal_color.c` ports XOptions' nearest-color, ANSI and native
+  Windows console mappings. The console flushes buffered headers before direct
+  writes and restores attributes/modes before diagnostics or the next file.
+  Disabled colors, redirected streams and structured formats remain plain.
 
 ## The runtime layer
 
@@ -195,16 +229,21 @@ library is not called at all, and with the default MSVC 64-bit build it is not
 even linked. `x_strlen` is `lstrlenA`, `x_malloc` is `HeapAlloc` on
 `GetProcessHeap()`, `x_fopen` is `CreateFileW` and the returned `void *` is a
 `HANDLE`, `x_printf` formats into a buffer and hands it to `WriteFile` on
-`GetStdHandle(STD_OUTPUT_HANDLE)`. Twenty-three imports in total:
+`GetStdHandle(STD_OUTPUT_HANDLE)`. The current Release console image imports 50
+`KERNEL32.dll` symbols on x64 and 51 on ARM64; the ARM64 image adds
+`IsProcessorFeaturePresent` for CPU capability detection. The import set is:
 
 | Area | Functions |
 | --- | --- |
 | Memory | `GetProcessHeap`, `HeapAlloc`, `HeapReAlloc`, `HeapFree` |
-| Files | `CreateFileW`, `ReadFile`, `SetFilePointerEx`, `CloseHandle`, `GetFileAttributesW` |
-| Console | `GetStdHandle`, `WriteFile`, `FlushFileBuffers` |
-| Directories | `FindFirstFileW`, `FindNextFileW`, `FindClose`, `GetModuleFileNameA` |
-| Process | `GetCommandLineW`, `GetEnvironmentVariableA`, `ExitProcess`, `GetTickCount` |
+| Files and metadata | `CreateFileW`, `ReadFile`, `SetFilePointerEx`, `CloseHandle`, `GetFileAttributesW`, `DeleteFileW`, `GetFileInformationByHandle`, `GetFileSizeEx`, `GetFileType`, `LocalFileTimeToFileTime`, `SetFileAttributesW`, `SetFileTime`, `DosDateTimeToFileTime`, `MoveFileExW` |
+| Console | `GetStdHandle`, `WriteFile`, `FlushFileBuffers`, `GetConsoleMode`, `SetConsoleMode` |
+| Directories and paths | `FindFirstFileW`, `FindNextFileW`, `FindClose`, `GetModuleFileNameA`, `CreateDirectoryW`, `GetFullPathNameW`, `RemoveDirectoryW`, `GetTempPathW` |
+| Process, timing, errors and threads | `GetCommandLineW`, `GetEnvironmentVariableA`, `ExitProcess`, `GetTickCount`, `QueryPerformanceCounter`, `QueryPerformanceFrequency`, `GetLastError`, `SetLastError`, `GetCurrentThreadId` |
+| Thread-local storage | `TlsAlloc`, `TlsGetValue`, `TlsSetValue`, `TlsFree` |
+| Dynamic loading | `LoadLibraryW`, `GetProcAddress`, `FreeLibrary` |
 | Strings | `lstrlenA`, `MultiByteToWideChar`, `WideCharToMultiByte` |
+| ARM64 CPU features | `IsProcessorFeaturePresent` |
 
 The file and directory calls are the **wide** forms, and the program is driven
 by `GetCommandLineW`, because a `CreateFileA` build cannot even name a file
@@ -227,24 +266,23 @@ Everywhere else the same stubs forward to `<string.h>`, `<stdlib.h>`,
 `main` does not exist. `console/main_console.c` defines `x_main`, and what
 reaches it depends on the build:
 
-* **CRT-free** (`CDIE_NO_CRT`, the MSVC 64-bit default) — the linker entry is
+* **CRT-free** (`CDIE_NO_CRT`, the MSVC x64/ARM64 default) — the linker entry is
   `x_entry_point` in `utils_entry.c`. It calls `x_startup`, which splits
   `GetCommandLineW()` into `argv` using the documented Microsoft quoting
   rules, converts each argument to UTF-8, calls `x_main` and passes the result
   to `ExitProcess`.
 
-  The split between the two functions is not cosmetic. The loader jumps to the
-  entry point with a 16-byte aligned stack, whereas compiled code assumes the
-  8-byte offset a `CALL` leaves behind; letting `x_entry_point` do nothing but
-  call `x_startup` restores the relationship the x64 ABI expects before any
-  aligned SSE spill happens.
+  The split between the two functions is not cosmetic. On x64 the call into
+  `x_startup` establishes the call-relative stack alignment expected by
+  compiled code; on ARM64 it preserves the ABI's 16-byte SP alignment.
 
 * **Hosted** — a one-line `main` forwards to `x_main`.
 
-Three routines exist only in the CRT-free build, because the compiler emits
-calls to them for structure initialisation and large copies no matter what the
-source says: `memset`, `memcpy`, `memmove`, plus the `_fltused` marker MSVC
-references from every object file that touches floating point.
+The CRT-free entry object supplies `memset`, `memcpy`, `memmove`, `memcmp`,
+`strlen`, `abs`, and `labs`, plus the `_fltused` marker MSVC references from
+every object file that touches floating point. Some are emitted by the
+compiler for structure initialisation and large copies; the rest cover the few
+standard-library calls retained in dependency code, including Debug builds.
 
 They are compiled with `#pragma optimize("", off)`. `#pragma function` stops
 the compiler substituting an intrinsic for an explicit call, but it does *not*
@@ -252,11 +290,12 @@ stop loop-idiom recognition: at `/O2` a plain byte loop that fills memory is
 itself rewritten into `call memset`. Inside the definition of `memset` that is
 infinite recursion, and it presents as a stack overflow on the first call.
 
-A related constraint runs through the whole CRT-free build: **no function may
-have a stack frame larger than a page.** Stack probes (`__chkstk`) come from
-the CRT, so an oversized frame walks past the guard page instead of growing
-the stack. This is why `x_startup` heap-allocates `argv` and why the bignum
-scratch in `utils_fp.c` is sized the way it is.
+The freestanding xxfclib build supplies the architecture-specific compiler
+helpers that would otherwise come from the runtime. Its x64 and ARM64
+`__chkstk` implementations touch each page before a large stack allocation;
+the ARM64 helper library also supplies the 32-bit interlocked operations MSVC
+emits as out-of-line calls. `x_startup` still heap-allocates `argv`, and the
+floating point bignums remain compact, to avoid unnecessary stack pressure.
 
 ### Floating point
 
@@ -297,14 +336,16 @@ see [LIMITATIONS.md](LIMITATIONS.md#runtime).
 
 ## Scan pipeline
 
-1. **Load** the file into memory (`xb_open`).
-2. **Detect** the file type set (`xft_detect`) and pick the preferred one in
-   the same order the reference engine uses (`PE32`, `PE64`, `ELF32`, …,
-   falling back to `Binary`). A .NET PE also enters the set as a **CLI
-   assembly** (`XFT_CLI_ASSEMBLY`); the primary type stays PE, but the flag
-   drives the DOTNET binding below.
-3. **Parse** the format — `xpe_parse` for PE, `xjpeg_parse` for JPEG — and
-   build the memory map. Other inputs get a single flat `Data` region.
+1. **Open** the input with `xx_io` and prepare a bounded read-only view of the
+   selected range. Small files are buffered; larger files use bounded windows.
+2. **Detect** native file types with `xx_scan_detect_type()` and dispatch the
+   preferred type through the engine's callbacks. The compatibility default
+   path keeps the reference's Binary/COM fallback order. A .NET PE appears as
+   `Binary`, `MSDOS`, `PE`, its actual `PE32`/`PE64` width, and `DOTNET`.
+   The DIE callback retains that PE width and enables the CLI-assembly flag
+   (`XFT_CLI_ASSEMBLY`) for the DOTNET binding below.
+3. **Parse** the format with xxfclib's native inspection readers and build the
+   memory map. Other inputs get a single flat `Data` region.
 4. **Create** a JavaScript context and install the API. The format object is
    bound as `Binary`, the format name (`PE`, `ELF`, …) and — for a .NET PE —
    `DOTNET`.
@@ -321,7 +362,7 @@ see [LIMITATIONS.md](LIMITATIONS.md#runtime).
    * its database is enabled.
 
    Each script is evaluated in the global scope and then its `detect()`
-   function is called with `(bShowType, bShowVersion, bShowInfo)`.
+   function is called with `(show_type, show_version, show_info)`.
 7. **Collect** results through `_setResult`. Duplicates suppressed by
    `_removeResult` are remembered in a blacklist, exactly as
    `DiE_ScriptEngine::_setResultSlot` does.
@@ -337,7 +378,7 @@ Three details decide whether the printed lines are identical to `diec`:
   independently and appended after the previous one — the reference engine
   never re-sorts the combined list. Scripts that check
   `_isResultPresent(...)` before adding a record therefore see the same state.
-* **Result order.** `XScanEngine::sortRecords` sorts by `nPrio` only; for the
+* **Result order.** `XScanEngine::sortRecords` sorts only by priority; for the
   small lists a single scan produces this behaves like a stable sort, which is
   what `cdie` implements explicitly.
 * **String construction.** `createResultStringEx` is reproduced verbatim:

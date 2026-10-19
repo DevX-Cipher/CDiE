@@ -5,7 +5,11 @@ cmake_minimum_required(VERSION 3.16)
 if(POLICY CMP0091)
     cmake_policy(SET CMP0091 NEW)
 endif()
-
+if(POLICY CMP0184)
+    # Select per-target runtime checks before C is first enabled. CRT-free
+    # targets clear this property instead of inheriting Debug's /RTC flags.
+    cmake_policy(SET CMP0184 NEW)
+endif()
 file(STRINGS ${CMAKE_CURRENT_LIST_DIR}/release_version.txt CDIE_VERSION)
 
 project(cdie VERSION ${CDIE_VERSION} LANGUAGES C)
@@ -31,6 +35,44 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(CDIE_WERROR "Treat compiler warnings as errors" OFF)
 
+# The comprehensive private Radare2 gate covers each local library with a
+# compatible upstream corpus: decoding/assembly, bytecode, demangling,
+# emulation and file formats. The older ASM-only switch remains available for
+# callers that use the focused dependency check.
+option(CDIE_BUILD_PRIVATE_RADARE2_TESTS
+    "Build all private Radare2-derived compatibility tests" OFF)
+option(CDIE_BUILD_PRIVATE_ASM_TESTS
+    "Build only the private ARM/x86 asm corpus test" OFF)
+
+if(CDIE_BUILD_PRIVATE_ASM_TESTS OR CDIE_BUILD_PRIVATE_RADARE2_TESTS)
+    if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/private_tests/CMakeLists.txt")
+        message(FATAL_ERROR
+            "Private Radare2 tests need private_tests/CMakeLists.txt")
+    endif()
+    enable_testing()
+    set(XXFC_CDISASM_ENABLE_ARM ON)
+    set(XXFC_CDISASM_ENABLE_EXTRA ON)
+endif()
+
+if(CDIE_BUILD_PRIVATE_RADARE2_TESTS)
+    if(NOT DEFINED XXFC_RADARE2_TESTBINS OR
+       NOT IS_DIRECTORY "${XXFC_RADARE2_TESTBINS}")
+        message(FATAL_ERROR
+            "CDIE_BUILD_PRIVATE_RADARE2_TESTS requires "
+            "-DXXFC_RADARE2_TESTBINS=<pinned radare2-testbins checkout>")
+    endif()
+
+    get_filename_component(_CDIE_DEFAULT_PRIVATE_LIBS_DIR
+        "${CMAKE_CURRENT_LIST_DIR}/../_mylibs" ABSOLUTE)
+    set(CDIE_PRIVATE_LIBS_DIR "${_CDIE_DEFAULT_PRIVATE_LIBS_DIR}"
+        CACHE PATH "Directory containing the local libraries' private Radare2 tests")
+    unset(_CDIE_DEFAULT_PRIVATE_LIBS_DIR)
+
+    # Configure the format suite in xxfclib's own directory so its private
+    # tests retain the correct project source directory for internal headers.
+    set(XXFC_BUILD_RADARE2_PRIVATE_TESTS ON)
+endif()
+
 # ------------------------------------------------------------------ xxfclib --
 #
 # Added HERE, above the warning block, on purpose. add_compile_options() and
@@ -49,17 +91,37 @@ option(CDIE_WERROR "Treat compiler warnings as errors" OFF)
 # compiled: a /NODEFAULTLIB program cannot link objects that reference
 # __GSHandlerCheck or carry /DEFAULTLIB records. x86 additionally needs the
 # compiler's 64-bit arithmetic helpers (_alldiv, _allshr and friends) from
-# libcmt, so this defaults to ON only for 64-bit MSVC.
-if(MSVC AND (CMAKE_SIZEOF_VOID_P EQUAL 8))
+# libcmt. The in-tree compiler helpers cover x64 and ARM64, so those are the
+# two architectures where this defaults to ON.
+set(CDIE_NO_CRT_SUPPORTED FALSE)
+if(MSVC AND CMAKE_C_COMPILER_ARCHITECTURE_ID MATCHES "^(x64|ARM64)$")
+    set(CDIE_NO_CRT_SUPPORTED TRUE)
     set(CDIE_NO_CRT_DEFAULT ON)
 else()
     set(CDIE_NO_CRT_DEFAULT OFF)
 endif()
 option(CDIE_NO_CRT "Link without the C runtime (KERNEL32 import only)" ${CDIE_NO_CRT_DEFAULT})
 
+if(CDIE_NO_CRT AND MSVC AND NOT CDIE_NO_CRT_SUPPORTED)
+    message(FATAL_ERROR
+        "CDIE_NO_CRT is supported only for MSVC x64 and ARM64 targets")
+endif()
+
+# Older CMake versions and previously configured build trees can carry MSVC's
+# /RTC flags in the configuration flags. Strip them for CRT-free targets; with
+# CMP0184 NEW, the per-target MSVC_RUNTIME_CHECKS property below prevents them
+# from being added again.
 if(CDIE_NO_CRT AND MSVC)
-    # xxfclib's matching switch: it compiles the static archive /GS- /GL- /Zl
-    # and puts the clean-room __chkstk in it. It deliberately does NOT define
+    foreach(_cdie_flags CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELWITHDEBINFO)
+        string(REGEX REPLACE "[/-](RTC[1csu]|GZ)" ""
+            ${_cdie_flags} "${${_cdie_flags}}")
+    endforeach()
+endif()
+
+if(CDIE_NO_CRT AND MSVC)
+    # xxfclib's matching switch compiles the static archive /GS- /GL- /Zl and
+    # exposes the architecture's clean-room compiler helpers. It deliberately
+    # does NOT define
     # XXFC_NO_CRT -- that would make xxfclib's own entry object emit
     # memset/memcpy/memmove/_fltused, which src/core/utils_entry.c already
     # owns here.
@@ -104,6 +166,9 @@ if(NOT TARGET xxfclib AND NOT TARGET xxfclib_static)
                     "SHELL:-include string.h" "SHELL:-include stdlib.h")
                 target_compile_definitions(${_CDIE_XXFC_TARGET} PRIVATE
                     _POSIX_C_SOURCE=200809L WEP_UNIX=AF_UNIX)
+                if(APPLE)
+                    target_compile_definitions(${_CDIE_XXFC_TARGET} PRIVATE _DARWIN_C_SOURCE)
+                endif()
             endif()
         endforeach()
     endif()
@@ -126,6 +191,20 @@ else()
 
     if(CDIE_WERROR)
         add_compile_options(-Werror)
+    endif()
+endif()
+
+# Resolve the database before the GUI so the macOS bundle can carry it.
+set(CDIE_DATABASE_DIR "" CACHE PATH "Directory holding db, db_extra and db_custom")
+
+set(CDIE_DATABASE_IMPLICIT OFF)
+
+if(NOT CDIE_DATABASE_DIR)
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/dep/Detect-It-Easy/db")
+        get_filename_component(CDIE_DATABASE_DIR "${CMAKE_CURRENT_LIST_DIR}/dep/Detect-It-Easy" ABSOLUTE)
+    elseif(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../_mylibs/Detect-It-Easy/db")
+        get_filename_component(CDIE_DATABASE_DIR "${CMAKE_CURRENT_LIST_DIR}/../_mylibs/Detect-It-Easy" ABSOLUTE)
+        set(CDIE_DATABASE_IMPLICIT ON)
     endif()
 endif()
 
@@ -191,19 +270,6 @@ endif()
 # one when it can find it. Point CDIE_DATABASE_DIR at the directory holding
 # db/, db_extra/ and db_custom/, or set it to NONE to package the binary
 # alone.
-
-set(CDIE_DATABASE_DIR "" CACHE PATH "Directory holding db, db_extra and db_custom")
-
-set(CDIE_DATABASE_IMPLICIT OFF)
-
-if(NOT CDIE_DATABASE_DIR)
-    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/dep/Detect-It-Easy/db")
-        get_filename_component(CDIE_DATABASE_DIR "${CMAKE_CURRENT_LIST_DIR}/dep/Detect-It-Easy" ABSOLUTE)
-    elseif(EXISTS "${CMAKE_CURRENT_LIST_DIR}/../_mylibs/Detect-It-Easy/db")
-        get_filename_component(CDIE_DATABASE_DIR "${CMAKE_CURRENT_LIST_DIR}/../_mylibs/Detect-It-Easy" ABSOLUTE)
-        set(CDIE_DATABASE_IMPLICIT ON)
-    endif()
-endif()
 
 # main_console.c resolve_database_path() looks for db/ next to the executable
 # and nowhere else, so the database has to land in the same directory the

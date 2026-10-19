@@ -191,7 +191,7 @@ a delimited list (object and array literals, argument and parameter lists)
 check for EOF explicitly so a truncated file cannot spin.
 
 The scan driver reports a failing script as
-`<script name>: <message>` in `ScanResult.ppErrors`, printed with `-m`.
+`<script name>: <message>` in `xx_scan_result.ppErrors`, printed with `-m`.
 A failing script never aborts the scan — this mirrors `DiE_Script::_handleError`.
 
 ---

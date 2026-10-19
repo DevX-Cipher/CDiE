@@ -53,7 +53,7 @@ if(DIE_BUILD_SHARED)
     # Hidden by default so only the DIE_* entry points (which die.h marks
     # visibility("default") when DIE_BUILD_SHARED is set) reach the dynamic
     # symbol table. Without it the engine's internals -- cd_malloc, db_load,
-    # inflate_raw and ~300 more -- take part in ELF symbol interposition and a
+    # cd_realloc and ~300 more -- take part in ELF symbol interposition and a
     # host that happens to define one of those names silently replaces it.
     #
     # VERSION/SOVERSION give the library a real soname so a distribution can

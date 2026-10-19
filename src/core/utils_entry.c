@@ -50,7 +50,7 @@
 
 #if defined(_MSC_VER)
 /* Keep the compiler from replacing an explicit call with the intrinsic. */
-#pragma function(memset, memcpy, memmove, memcmp, strlen)
+#pragma function(memset, memcpy, memmove, memcmp, strlen, abs, labs)
 
 /* MSVC emits a reference to this marker from every object file that uses
  * floating point. Normally libcmt supplies it; here it is just a symbol
@@ -159,6 +159,19 @@ size_t strlen(const char *pString)
     }
 
     return (size_t)(pEnd - pString);
+}
+
+/* WavPack uses the standard integer absolute-value helpers. Release builds
+ * inline these expressions, while Debug leaves calls that a /NODEFAULTLIB
+ * executable must provide itself. */
+int abs(int nValue)
+{
+    return (nValue < 0) ? -nValue : nValue;
+}
+
+long labs(long nValue)
+{
+    return (nValue < 0) ? -nValue : nValue;
 }
 
 #if defined(_MSC_VER)
@@ -303,10 +316,9 @@ static int x_run_command_line(void)
         return 0;
     }
 
-    /* Everything is on the heap: stack probes come from the CRT, so no frame
-     * in a CRT-free build may exceed a page. The command line is parsed as
-     * UTF-16 and each argument is converted to UTF-8, which is the encoding
-     * the rest of the program (and the file APIs) expect.                   */
+    /* Keep the variable-sized command-line storage on the heap. The command
+     * line is parsed as UTF-16 and each argument is converted to UTF-8, which
+     * is the encoding the rest of the program (and the file APIs) expect.   */
     nLen = x_wcslen(pCommandLine);
     pCopy = (WCHAR *)xx_rt_malloc((nLen + 2) * sizeof(WCHAR));
     ppWideArgv = (WCHAR **)xx_rt_malloc(X_MAX_ARGS * sizeof(WCHAR *));
@@ -361,10 +373,9 @@ static void x_startup(void)
     ExitProcess((UINT)x_run_command_line());
 }
 
-/* The linker entry point. The loader jumps here with a 16-byte aligned
- * stack, whereas compiled code assumes the 8-byte offset that a CALL leaves
- * behind; doing the work in x_startup means the CALL below restores the
- * relationship the x64 ABI expects before any aligned SSE spill happens.   */
+/* The linker entry point. Keep startup work behind an ordinary compiler
+ * generated call: on x64 it establishes the CALL-relative stack alignment
+ * expected by compiled code, while ARM64 keeps SP 16-byte aligned.           */
 void __cdecl x_entry_point(void)
 {
     x_startup();

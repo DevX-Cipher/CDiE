@@ -113,10 +113,11 @@ The Windows build calls Win32 only and links no C runtime (see
 [ARCHITECTURE.md](ARCHITECTURE.md#the-runtime-layer)). Three consequences are
 worth stating outright:
 
-* **`CDIE_NO_CRT` defaults to ON only for 64-bit MSVC.** A 32-bit build needs
-  the compiler's 64-bit arithmetic helpers (`_alldiv`, `_allshr` and
-  friends), which live in `libcmt` and have no Win32 equivalent, so it links
-  the CRT as usual. The option can be turned off explicitly on any target.
+* **`CDIE_NO_CRT` is supported by native MSVC x64 and ARM64.** It defaults to
+  ON for those two architectures. A 32-bit build needs the compiler's 64-bit
+  arithmetic helpers (`_alldiv`, `_allshr` and friends), which live in
+  `libcmt`, while ARM64EC uses a different hybrid ABI; both link the CRT as
+  usual. The option can be turned off explicitly on a supported target.
 
 * **Transcendental functions are accurate to roughly 1 ULP, not correctly
   rounded.** `utils_math.c` carries the full-length fdlibm minimax

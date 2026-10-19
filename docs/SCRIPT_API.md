@@ -75,6 +75,26 @@ convention on top of `_setResult`. `db/language` adds `_setLang`,
 | `findByte`, `findWord`, `findDword` `(off, size, value)` | numeric search |
 | `isSignaturePresent(off, size, sig)` | `findSignature(...) != -1` |
 | `isSignatureInSectionPresent(n, sig)` | search inside section *n* |
+| `isAnySignatureInSectionPresent(n, signatures)` | true if any signature in the array matches inside section *n* |
+
+```js
+if (PE.isAnySignatureInSectionPresent(0, [
+    "558becb90f0000006a006a004975f951535657b8........e8",
+    "6D5F6973526561644F6E6C79",
+    "'Example marker'"
+])) {
+    // At least one pattern matched.
+}
+```
+
+The array uses the same signature syntax as `isSignatureInSectionPresent`,
+including wildcards, quoted literals, character classes, and pointer records.
+Patterns beginning with literal bytes share a section pass; patterns with other
+prefixes use the existing search path. The result is a boolean and does not
+identify the matching pattern. An empty array, a non-string entry, an empty or malformed signature,
+or an invalid section returns `false`. Every entry is validated before searching.
+Malformed signature text also retains the existing invalid-signature diagnostic.
+Section numbering and overlay handling match `isSignatureInSectionPresent`.
 
 ## Addresses and layout
 
@@ -312,6 +332,40 @@ Each entry has `Number`, `Name`, `VirtualSize`, `VirtualAddress`, `FileSize`,
 
 `field` is the struct member name, e.g.
 `PE.getImageOptionalHeader("DllCharacteristics")`.
+
+### AMD64 unwind validation (cdie extension)
+
+`PE.validateAmd64Unwind(directoryRva, directorySize)` runs the generic PE
+heuristic's exception-table checks in native code. Both arguments are unsigned
+32-bit integers describing the exception directory's RVA and byte size. The
+caller must first establish AMD64 and that the optional header contains the
+exception-directory slot.
+
+The result is an object with `status`, `entryIndex`, `beginRva`, `endRva`, and
+`unwindRva`:
+
+| `status` | Meaning |
+| --- | --- |
+| `0` | The table passes these heuristic checks. |
+| `1` | The directory ends with an incomplete 12-byte function entry. |
+| `2` | A positive function range is not contained in a mapped section. |
+| `3` | A function entry references invalid unwind metadata. |
+
+For statuses `2` and `3`, `entryIndex` is the zero-based index of the first
+failing record, and the three RVA fields contain that record's values. These
+four fields are zero for statuses `0` and `1`.
+
+`null` means native validation is unavailable, for example because the
+directory is absent or not completely file-backed, the address precision is
+unsupported, or a read or allocation fails. It is not a validity result: use
+the existing JavaScript validator. Databases shared with other engines must
+also check `typeof PE.validateAmd64Unwind === "function"` before calling it.
+
+This matches the generic heuristic rather than performing full Windows ABI
+validation. It retains permissive DWORD-aligned pointers, strict structural
+checks for WORD-aligned records, indirect table references, and the existing
+treatment of zero-length or reversed ranges. It does not change the file
+cursor or PE inspection state.
 
 ### Debug directory
 

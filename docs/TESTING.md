@@ -33,19 +33,22 @@ comparisons, searches, and the unmatched quote in the database's ZIP marker.
 `private_tests/test_windows_argv.c` compares the Windows UTF-8 argument parser
 with the CRT's wide-character parser. Both are private CMake test targets.
 
-`private_tests/test_file_reads.c` checks the shared file loader with a 97-byte
-device that returns one or seven bytes per call. It verifies the complete
-payload and terminator, and rejects premature EOF, read errors, invalid sizes,
-and transfers claiming more bytes than requested. Failed loads leave the
-`DieFile` empty; the borrowed source remains open. Build and run it with:
+`tests/test_io_buffer.c` checks the shared `xx_io` cache with a source that
+returns short transfers. It verifies window boundaries, independent cursors,
+sticky read errors, premature EOF, and source ownership. Automatic buffering
+eagerly copies inputs smaller than the captured capacity, including a trailing
+NUL, while equal-sized inputs remain streamed. Eager-load failures leave the
+source open and owned by the caller. The same suite checks adaptive whole-file
+promotion, borrowed memory, and search estimates with extreme capacities.
+Build and run it with:
 
 ```powershell
-cmake --build F:\ownCloud_build\cdie\build --target cdie_test_file_reads
-& F:\ownCloud_build\cdie\build\srct\private_tests\cdie_test_file_reads.exe
+cmake --build F:\ownCloud_build\cdie\build --target cdie_test_io_buffer
+ctest --test-dir F:\ownCloud_build\cdie\build -R io_buffer --output-on-failure
 ```
 
-The loader retries short reads in requests of at most 64 MiB and publishes the
-file size only after all declared bytes are present. This matters for files
+The cache retries short reads in bounded requests and exposes a completed
+window or whole-file copy only after all declared bytes are present. This matters for files
 above 2 GiB: the Windows device caps a single transfer at `0x7fffffff` bytes.
 Previously one read silently scanned only that prefix. Two RAR SFX inputs
 exposed the problem: `TSData.exe` contains 1351 files and 178 directories, but

@@ -27,47 +27,217 @@
 #include <xxfclib/list/xx_list.h>
 #include <xxfclib/rt/xx_rt.h>
 #include <xxfclib/terminal/xx_terminal.h>
+#include <xxfclib/scan/xx_scan_console.h>
 
 #include "../app/cdie_app.h"
+
+typedef enum cdie_output_format {
+    CDIE_OUTPUT_TEXT = 0,
+    CDIE_OUTPUT_JSON,
+    CDIE_OUTPUT_XML,
+    CDIE_OUTPUT_CSV,
+    CDIE_OUTPUT_TSV,
+    CDIE_OUTPUT_PLAIN
+} cdie_output_format;
+
+static int g_bStdoutFailed = 0;
+
+/* Format once, then compare the requested byte count with the stream write.
+ * This catches a short WriteFile/fwrite as well as an outright failure. */
+static int cdie_printf(const char *pFormat, ...)
+{
+    char sStack[1024];
+    char *pText = sStack;
+    XX_RT_VA_LIST args;
+    XX_RT_VA_LIST copy;
+    int nSize = 0;
+    int nFormatted = 0;
+    int nWritten = 0;
+
+    if (g_bStdoutFailed) return -1;
+
+    XX_RT_VA_START(args, pFormat);
+    XX_RT_VA_COPY(copy, args);
+    nSize = xx_rt_vsnprintf(sStack, sizeof(sStack), pFormat, copy);
+    XX_RT_VA_END(copy);
+
+    if (nSize < 0) {
+        XX_RT_VA_END(args);
+        g_bStdoutFailed = 1;
+        return -1;
+    }
+
+    if ((size_t)nSize >= sizeof(sStack)) {
+        pText = (char *)xx_rt_malloc((size_t)nSize + 1);
+        if (pText == NULL) {
+            XX_RT_VA_END(args);
+            g_bStdoutFailed = 1;
+            return -1;
+        }
+        nFormatted = xx_rt_vsnprintf(pText, (size_t)nSize + 1, pFormat, args);
+    } else {
+        nFormatted = nSize;
+    }
+    XX_RT_VA_END(args);
+
+    if (nFormatted != nSize) {
+        if (pText != sStack) xx_rt_free(pText);
+        g_bStdoutFailed = 1;
+        return -1;
+    }
+
+    nWritten = xx_rt_fprintf(xx_rt_stdout(), "%s", pText);
+    if (pText != sStack) xx_rt_free(pText);
+    if (nWritten != nSize) {
+        g_bStdoutFailed = 1;
+        return -1;
+    }
+
+    return nWritten;
+}
+
+static int cdie_finish_result(int nResult)
+{
+    if (xx_rt_fflush(xx_rt_stdout()) != 0) g_bStdoutFailed = 1;
+    if ((nResult == CR_SUCCESS) && g_bStdoutFailed) return CR_CANNOTWRITEOUTPUT;
+    return nResult;
+}
+
+static int select_output_format(cdie_output_format *pCurrent,
+                                cdie_output_format requested,
+                                const char *pOption)
+{
+    if (*pCurrent != CDIE_OUTPUT_TEXT) {
+        xx_rt_fprintf(xx_rt_stderr(),
+                      *pCurrent == requested
+                          ? "Output format specified more than once: %s\n"
+                          : "Output formats are mutually exclusive: %s\n",
+                      pOption);
+        return 0;
+    }
+
+    *pCurrent = requested;
+    return 1;
+}
+
+static xxfc_status_t cdie_structured_sink(void *pContext,
+                                          const char *pData,
+                                          size_t nSize)
+{
+    int nWritten;
+
+    (void)pContext;
+    if (nSize > 0x7fffffffU) {
+        g_bStdoutFailed = 1;
+        return XXFC_ERR_IO;
+    }
+    nWritten = cdie_printf("%.*s", (int)nSize, pData);
+    return (nWritten == (int)nSize) ? XXFC_OK : XXFC_ERR_IO;
+}
+
+static void print_json_string(const char *pText)
+{
+    xx_terminal_writer writer;
+
+    xx_terminal_writer_init(&writer, cdie_structured_sink, NULL);
+    if (xx_terminal_writer_json_string(&writer, pText) != XXFC_OK) {
+        g_bStdoutFailed = 1;
+    }
+}
+
+/* Every XML value emitted by this frontend is an attribute value. */
+static void print_xml_string(const char *pText)
+{
+    xx_terminal_writer writer;
+
+    xx_terminal_writer_init(&writer, cdie_structured_sink, NULL);
+    if (xx_terminal_writer_xml_attribute(&writer, pText) != XXFC_OK) {
+        g_bStdoutFailed = 1;
+    }
+}
 
 
 static void print_help(void)
 {
-    xx_rt_printf("%s v%s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
-    xx_rt_printf("Detect It Easy console engine, C port\n");
-    xx_rt_printf("Copyright(C) 2026 hors<horsicq@gmail.com> Web: http://ntinfo.biz\n\n");
-    xx_rt_printf("Usage: cdie [options] target\n\n");
-    xx_rt_printf("Options:\n");
-    xx_rt_printf("  -h, --help                Displays this help.\n");
-    xx_rt_printf("  -v, --version             Displays version information.\n");
-    xx_rt_printf("  -r, --recursivescan       Scan directories recursively.\n");
-    xx_rt_printf("  -d, --deepscan            Deep scan.\n");
-    xx_rt_printf("  -u, --heuristicscan       Heuristic scan.\n");
-    xx_rt_printf("  -g, --aggressivecscan     Aggressive scan.\n");
-    xx_rt_printf("  -b, --verbose             Verbose output.\n");
-    xx_rt_printf("  -f, --format              Format the result strings (the default).\n");
-    xx_rt_printf("      --noformat            Do not format the result strings.\n");
-    xx_rt_printf("      --nocolor             Disable color output (cdie never colors).\n");
-    xx_rt_printf("      --sse2, --nosse2       Enable/disable SSE2 acceleration.\n");
-    xx_rt_printf("      --avx2, --noavx2       Enable/disable AVX2 acceleration.\n");
-    xx_rt_printf("                           Default: on when supported; unsupported keys are ignored.\n");
-    xx_rt_printf("  -U, --hideunknown         Hide unknown results.\n");
-    xx_rt_printf("  -M, --messages            Show engine messages.\n");
-    xx_rt_printf("  -l, --profiling           Show profiling information.\n");
-    xx_rt_printf("  -j, --json                Result as JSON.\n");
-    xx_rt_printf("  -x, --xml                 Result as XML.\n");
-    xx_rt_printf("  -c, --csv                 Result as CSV.\n");
-    xx_rt_printf("  -t, --tsv                 Result as TSV.\n");
-    xx_rt_printf("  -p, --plaintext           Result as plain text.\n");
-    xx_rt_printf("  -D, --database <path>     Main database path.\n");
-    xx_rt_printf("  -E, --extradatabase <p>   Extra database path.\n");
-    xx_rt_printf("  -C, --customdatabase <p>  Custom database path.\n");
-    xx_rt_printf("  -s, --showdatabase        Show the database information.\n");
-    xx_rt_printf("      --createtar <path>    Create TAR archive from database.\n");
-    xx_rt_printf("      --createprecompiledtar <p> Create precompiled bytecode TAR archive.\n");
-    xx_rt_printf("\n");
-    xx_rt_printf("Target:\n");
-    xx_rt_printf("  target                    The file or directory to open.\n");
+    cdie_printf("%s v%s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
+    cdie_printf("Detect It Easy console engine, C port\n");
+    cdie_printf("Copyright(C) 2026 hors<horsicq@gmail.com> Web: http://ntinfo.biz\n\n");
+    cdie_printf("Usage: %s [options] target\n\n", X_APPLICATIONNAME);
+    cdie_printf("Options:\n");
+    cdie_printf("  -h, --help                Displays this help.\n");
+    cdie_printf("  -v, --version             Displays version information.\n");
+    cdie_printf("  -r, --recursivescan       Scan directories recursively.\n");
+    cdie_printf("  -d, --deepscan            Deep scan.\n");
+    cdie_printf("  -u, --heuristicscan       Heuristic scan.\n");
+    cdie_printf("  -g, --aggressivecscan     Aggressive scan.\n");
+    cdie_printf("  -b, --verbose             Verbose output.\n");
+    cdie_printf("  -f, --format              Format the result strings (the default).\n");
+    cdie_printf("      --noformat            Do not format the result strings.\n");
+    cdie_printf("      --color, --nocolor    Enable/disable terminal colors (default: on).\n");
+#if defined(_M_IX86) || (defined(_M_X64) && !defined(_M_ARM64EC)) || defined(__i386__) || \
+    (defined(__x86_64__) && !defined(_M_ARM64EC))
+    cdie_printf("      --sse2, --nosse2       Enable/disable SSE2 acceleration.\n");
+    cdie_printf("      --sse42, --nosse42     Enable/disable SSE4.2 acceleration.\n");
+    cdie_printf("      --avx2, --noavx2       Enable/disable AVX2 acceleration.\n");
+    cdie_printf("      --aes, --noaes         Enable/disable AES-NI acceleration.\n");
+    cdie_printf("      --sha, --nosha         Enable/disable SHA-NI for SHA-1/SHA-256.\n");
+    cdie_printf("      --vpclmulqdq, --novpclmulqdq\n");
+    cdie_printf("                           Enable/disable VPCLMULQDQ for CRC64.\n");
+#elif defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(__arm__) || defined(__aarch64__)
+    cdie_printf("      --neon, --noneon       Enable/disable Arm NEON acceleration.\n");
+    cdie_printf("      --armcrc32, --noarmcrc32\n");
+    cdie_printf("                           Enable/disable Arm CRC32 acceleration.\n");
+    cdie_printf("      --armcrypto, --noarmcrypto\n");
+    cdie_printf("                           Enable/disable Arm AES/SHA acceleration.\n");
+    cdie_printf("      --armdotprod, --noarmdotprod\n");
+    cdie_printf("      --armpmull, --noarmpmull\n");
+    cdie_printf("                           Enable/disable Arm dot-product acceleration.\n");
+#endif
+#if defined(_M_IX86) || defined(_M_X64) || defined(_M_ARM) || defined(_M_ARM64) || defined(_M_ARM64EC) || \
+    defined(__i386__) || defined(__x86_64__) || defined(__arm__) || defined(__aarch64__)
+    cdie_printf("                           Default: on when supported; unsupported keys are ignored.\n");
+#endif
+    cdie_printf("  -U, --hideunknown         Hide unknown results.\n");
+    cdie_printf("  -M, --messages            Show engine messages.\n");
+    cdie_printf("  -l, --profiling           Show profiling information.\n");
+    cdie_printf("  -j, --json                Result as JSON.\n");
+    cdie_printf("  -x, --xml                 Result as XML.\n");
+    cdie_printf("  -c, --csv                 Result as CSV.\n");
+    cdie_printf("  -t, --tsv                 Result as TSV.\n");
+    cdie_printf("  -p, --plaintext           Result as plain text.\n");
+    cdie_printf("  -D, --database <path>     Main database path.\n");
+    cdie_printf("  -E, --extradatabase <p>   Extra database path.\n");
+    cdie_printf("  -C, --customdatabase <p>  Custom database path.\n");
+    cdie_printf("  -s, --showdatabase        Show the database information.\n");
+    cdie_printf("      --createtar <path>    Create TAR archive from database.\n");
+    cdie_printf("      --createprecompiledtar <p> Create precompiled bytecode TAR archive.\n");
+    cdie_printf("\n");
+    cdie_printf("Target:\n");
+    cdie_printf("  target                    The file or directory to open.\n");
+}
+
+static void print_structured_information(cdie_output_format outputFormat,
+                                         int bIncludeUsage)
+{
+    if (outputFormat == CDIE_OUTPUT_JSON) {
+        cdie_printf("{\"tool\":");
+        print_json_string(X_APPLICATIONDISPLAYNAME);
+        cdie_printf(",\"version\":");
+        print_json_string(X_APPLICATIONVERSION);
+        if (bIncludeUsage) {
+            cdie_printf(",\"usage\":");
+            print_json_string("[options] target");
+        }
+        cdie_printf("}\n");
+    } else if (outputFormat == CDIE_OUTPUT_XML) {
+        cdie_printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<cdie version=\"");
+        print_xml_string(X_APPLICATIONVERSION);
+        if (bIncludeUsage) {
+            cdie_printf("\"><usage>[options] target</usage></cdie>\n");
+        } else {
+            cdie_printf("\"/>\n");
+        }
+    }
 }
 
 /* Frees the cdie_strdup'd elements and then the list itself. xx_list_t stores
@@ -135,7 +305,8 @@ static char *resolve_database_path(const char *pPath, const char *pDefaultName)
     return cdie_strdup(pDefaultName);
 }
 
-static void show_database(DBase *pDb, ScanOptions *pOptions)
+static void show_database(DBase *pDb, xx_scan_options *pOptions,
+                          cdie_output_format outputFormat)
 {
     /* Same list, in the same order, as XScanEngine::getSignatureStates(). */
     static const XFileType pTypes[] = {XFT_BINARY,  XFT_COM,     XFT_MSDOS, XFT_NE,     XFT_LE,       XFT_LX,     XFT_PE,      XFT_ELF,
@@ -143,17 +314,54 @@ static void show_database(DBase *pDb, ScanOptions *pOptions)
                                        XFT_ARCHIVE, XFT_ZIP,     XFT_JAR,   XFT_APK,    XFT_IPA,      XFT_DEX,    XFT_NPM,     XFT_MACHOFAT,
                                        XFT_AMIGAHUNK, XFT_ATARIST, XFT_DOS16M, XFT_DOS4G};
     size_t i = 0;
+    int bFirst = 1;
 
-    xx_rt_printf("Main database: %s\n", pOptions->pMainDatabasePath ? pOptions->pMainDatabasePath : "");
-    xx_rt_printf("Extra database: %s\n", pOptions->pExtraDatabasePath ? pOptions->pExtraDatabasePath : "");
-    xx_rt_printf("Custom database: %s\n", pOptions->pCustomDatabasePath ? pOptions->pCustomDatabasePath : "");
+    if (outputFormat == CDIE_OUTPUT_JSON) {
+        cdie_printf("  \"database\": {\"main\":");
+        print_json_string(pOptions->main_database_path);
+        cdie_printf(",\"extra\":");
+        print_json_string(pOptions->extra_database_path);
+        cdie_printf(",\"custom\":");
+        print_json_string(pOptions->custom_database_path);
+        cdie_printf(",\"signatures\":[");
+    } else if (outputFormat == CDIE_OUTPUT_XML) {
+        cdie_printf("  <database main=\"");
+        print_xml_string(pOptions->main_database_path);
+        cdie_printf("\" extra=\"");
+        print_xml_string(pOptions->extra_database_path);
+        cdie_printf("\" custom=\"");
+        print_xml_string(pOptions->custom_database_path);
+        cdie_printf("\">\n");
+    } else {
+        cdie_printf("Main database: %s\n", pOptions->main_database_path ? pOptions->main_database_path : "");
+        cdie_printf("Extra database: %s\n", pOptions->extra_database_path ? pOptions->extra_database_path : "");
+        cdie_printf("Custom database: %s\n", pOptions->custom_database_path ? pOptions->custom_database_path : "");
+    }
 
     for (i = 0; i < sizeof(pTypes) / sizeof(pTypes[0]); i++) {
         int nCount = db_count_for_type(pDb, pTypes[i]);
 
         if (nCount > 0) {
-            xx_rt_printf("\t%s: %d\n", xft_to_string(pTypes[i]), nCount);
+            if (outputFormat == CDIE_OUTPUT_JSON) {
+                if (!bFirst) cdie_printf(",");
+                cdie_printf("{\"type\":");
+                print_json_string(xft_to_string(pTypes[i]));
+                cdie_printf(",\"count\":%d}", nCount);
+                bFirst = 0;
+            } else if (outputFormat == CDIE_OUTPUT_XML) {
+                cdie_printf("    <signature type=\"");
+                print_xml_string(xft_to_string(pTypes[i]));
+                cdie_printf("\" count=\"%d\"/>\n", nCount);
+            } else {
+                cdie_printf("\t%s: %d\n", xft_to_string(pTypes[i]), nCount);
+            }
         }
+    }
+
+    if (outputFormat == CDIE_OUTPUT_JSON) {
+        cdie_printf("]}");
+    } else if (outputFormat == CDIE_OUTPUT_XML) {
+        cdie_printf("  </database>\n");
     }
 }
 
@@ -161,24 +369,30 @@ static void show_database(DBase *pDb, ScanOptions *pOptions)
  * real linker entry, otherwise from main(). */
 int x_main(int argc, char *argv[])
 {
-    ScanOptions options;
+    xx_scan_options options;
     DBase db;
     xx_list_t vecTargets;
     xx_list_t vecFiles;
     int nResult = CR_SUCCESS;
     int i = 0;
     int bShowDatabase = 0;
+    int bShowHelp = 0;
+    int bShowVersion = 0;
     int bDatabaseLoaded = 0;
     int bEndOfOptions = 0;
+    int bStructuredWrapper = 0;
+    int nStructuredFiles = 0;
+    cdie_output_format outputFormat = CDIE_OUTPUT_TEXT;
     const char *pCreateTarPath = NULL;
     const char *pCreateBcTarPath = NULL;
 
-    scan_options_init(&options);
+    g_bStdoutFailed = 0;
+    xx_scan_options_init(&options);
     /* diec formats the result strings by default, and printing exactly what
      * diec prints is the acceptance test, so the console front end turns the
      * option on before the command line is parsed. -f/--format stays an
      * explicit enable, --noformat is the opt-out. */
-    options.bFormatResult = 1;
+    options.format_result = 1;
     xx_rt_memset(&db, 0, sizeof(db));
     xx_list_init(&vecTargets, sizeof(char *), NULL);
     xx_list_init(&vecFiles, sizeof(char *), NULL);
@@ -198,58 +412,70 @@ int x_main(int argc, char *argv[])
         if (!bEndOfOptions && pArg[0] == '-' && pArg[1] == '-') {
             /* Long options starting with -- */
             if (xx_rt_strcmp(pArg, "--help") == 0) {
-                print_help();
-                scan_options_free(&options);
-                free_string_vector(&vecTargets);
-                free_string_vector(&vecFiles);
-                return CR_SUCCESS;
+                bShowHelp = 1;
             } else if (xx_rt_strcmp(pArg, "--version") == 0) {
-                xx_rt_printf("%s %s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
-                scan_options_free(&options);
-                free_string_vector(&vecTargets);
-                free_string_vector(&vecFiles);
-                return CR_SUCCESS;
+                bShowVersion = 1;
             } else if (xx_rt_strcmp(pArg, "--recursivescan") == 0) {
-                options.bRecursiveScan = 1;
+                options.recursive_scan = 1;
             } else if (xx_rt_strcmp(pArg, "--deepscan") == 0) {
-                options.bDeepScan = 1;
+                options.deep_scan = 1;
             } else if (xx_rt_strcmp(pArg, "--heuristicscan") == 0) {
-                options.bHeuristicScan = 1;
+                options.heuristic_scan = 1;
             } else if ((xx_rt_strcmp(pArg, "--aggressivecscan") == 0) || (xx_rt_strcmp(pArg, "--aggressivescan") == 0)) {
-                options.bAggressiveScan = 1;
+                options.aggressive_scan = 1;
             } else if (xx_rt_strcmp(pArg, "--verbose") == 0) {
-                options.bVerbose = 1;
+                options.verbose = 1;
             } else if (xx_rt_strcmp(pArg, "--format") == 0) {
-                options.bFormatResult = 1;
+                options.format_result = 1;
             } else if (xx_rt_strcmp(pArg, "--noformat") == 0) {
-                options.bFormatResult = 0;
+                options.format_result = 0;
             } else if (xx_rt_strcmp(pArg, "--hideunknown") == 0) {
-                options.bHideUnknown = 1;
+                options.hide_unknown = 1;
             } else if (xx_rt_strcmp(pArg, "--messages") == 0) {
-                options.bShowMessages = 1;
+                options.show_messages = 1;
             } else if (xx_rt_strcmp(pArg, "--profiling") == 0) {
-                options.bProfiling = 1;
+                options.profiling = 1;
             } else if (xx_rt_strcmp(pArg, "--json") == 0) {
-                options.bResultAsJSON = 1;
+                if (select_output_format(&outputFormat, CDIE_OUTPUT_JSON, pArg)) {
+                    options.result_as_json = 1;
+                } else {
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if (xx_rt_strcmp(pArg, "--xml") == 0) {
-                options.bResultAsXML = 1;
+                if (select_output_format(&outputFormat, CDIE_OUTPUT_XML, pArg)) {
+                    options.result_as_xml = 1;
+                } else {
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if (xx_rt_strcmp(pArg, "--csv") == 0) {
-                options.bResultAsCSV = 1;
+                if (select_output_format(&outputFormat, CDIE_OUTPUT_CSV, pArg)) {
+                    options.result_as_csv = 1;
+                } else {
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if (xx_rt_strcmp(pArg, "--tsv") == 0) {
-                options.bResultAsTSV = 1;
+                if (select_output_format(&outputFormat, CDIE_OUTPUT_TSV, pArg)) {
+                    options.result_as_tsv = 1;
+                } else {
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if ((xx_rt_strcmp(pArg, "--plaintext") == 0)) {
-                options.bResultAsPlainText = 1;
+                if (select_output_format(&outputFormat, CDIE_OUTPUT_PLAIN, pArg)) {
+                    options.result_as_plain_text = 1;
+                } else {
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if (xx_rt_strcmp(pArg, "--showdatabase") == 0) {
                 bShowDatabase = 1;
             } else if ((xx_rt_strcmp(pArg, "--database") == 0) && (i + 1 < argc)) {
-                xx_rt_free(options.pMainDatabasePath);
-                options.pMainDatabasePath = cdie_strdup(argv[++i]);
+                xx_rt_free(options.main_database_path);
+                options.main_database_path = cdie_strdup(argv[++i]);
             } else if ((xx_rt_strcmp(pArg, "--extradatabase") == 0) && (i + 1 < argc)) {
-                xx_rt_free(options.pExtraDatabasePath);
-                options.pExtraDatabasePath = cdie_strdup(argv[++i]);
+                xx_rt_free(options.extra_database_path);
+                options.extra_database_path = cdie_strdup(argv[++i]);
             } else if ((xx_rt_strcmp(pArg, "--customdatabase") == 0) && (i + 1 < argc)) {
-                xx_rt_free(options.pCustomDatabasePath);
-                options.pCustomDatabasePath = cdie_strdup(argv[++i]);
+                xx_rt_free(options.custom_database_path);
+                options.custom_database_path = cdie_strdup(argv[++i]);
             } else if ((xx_rt_strcmp(pArg, "--createtar") == 0) && (i + 1 < argc)) {
                 pCreateTarPath = argv[++i];
             } else if ((xx_rt_strcmp(pArg, "--createprecompiledtar") == 0) && (i + 1 < argc)) {
@@ -261,9 +487,9 @@ int x_main(int argc, char *argv[])
         } else if (!bEndOfOptions && pArg[0] == '-' && pArg[1] != '\0') {
             /* Short options (supports clustering like -rdu, -rd, etc.) */
             if (xx_rt_strcmp(pArg, "-he") == 0) {
-                options.bHeuristicScan = 1;
+                options.heuristic_scan = 1;
             } else if (xx_rt_strcmp(pArg, "-hu") == 0) {
-                options.bHideUnknown = 1;
+                options.hide_unknown = 1;
             } else {
                 size_t k = 0;
                 for (k = 1; pArg[k] != '\0'; k++) {
@@ -271,36 +497,45 @@ int x_main(int argc, char *argv[])
                     switch (c) {
                         case 'h':
                         case '?':
-                            print_help();
-                            scan_options_free(&options);
-                            free_string_vector(&vecTargets);
-                            free_string_vector(&vecFiles);
-                            return CR_SUCCESS;
+                            bShowHelp = 1;
+                            break;
 
                         case 'v':
-                            xx_rt_printf("%s %s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
-                            scan_options_free(&options);
-                            free_string_vector(&vecTargets);
-                            free_string_vector(&vecFiles);
-                            return CR_SUCCESS;
+                            bShowVersion = 1;
+                            break;
 
-                        case 'r': options.bRecursiveScan = 1; break;
-                        case 'd': options.bDeepScan = 1; break;
-                        case 'u': options.bHeuristicScan = 1; break;
-                        case 'g': options.bAggressiveScan = 1; break;
+                        case 'r': options.recursive_scan = 1; break;
+                        case 'd': options.deep_scan = 1; break;
+                        case 'u': options.heuristic_scan = 1; break;
+                        case 'g': options.aggressive_scan = 1; break;
                         case 'b':
-                        case 'V': options.bVerbose = 1; break;
-                        case 'f': options.bFormatResult = 1; break;
-                        case 'U': options.bHideUnknown = 1; break;
+                        case 'V': options.verbose = 1; break;
+                        case 'f': options.format_result = 1; break;
+                        case 'U': options.hide_unknown = 1; break;
                         case 'M':
-                        case 'm': options.bShowMessages = 1; break;
-                        case 'l': options.bProfiling = 1; break;
-                        case 'j': options.bResultAsJSON = 1; break;
-                        case 'x': options.bResultAsXML = 1; break;
-                        case 'c': options.bResultAsCSV = 1; break;
-                        case 't': options.bResultAsTSV = 1; break;
+                        case 'm': options.show_messages = 1; break;
+                        case 'l': options.profiling = 1; break;
+                        case 'j':
+                            if (select_output_format(&outputFormat, CDIE_OUTPUT_JSON, "-j")) options.result_as_json = 1;
+                            else nResult = CR_INVALIDPARAMETER;
+                            break;
+                        case 'x':
+                            if (select_output_format(&outputFormat, CDIE_OUTPUT_XML, "-x")) options.result_as_xml = 1;
+                            else nResult = CR_INVALIDPARAMETER;
+                            break;
+                        case 'c':
+                            if (select_output_format(&outputFormat, CDIE_OUTPUT_CSV, "-c")) options.result_as_csv = 1;
+                            else nResult = CR_INVALIDPARAMETER;
+                            break;
+                        case 't':
+                            if (select_output_format(&outputFormat, CDIE_OUTPUT_TSV, "-t")) options.result_as_tsv = 1;
+                            else nResult = CR_INVALIDPARAMETER;
+                            break;
                         case 'p':
-                        case 'P': options.bResultAsPlainText = 1; break;
+                        case 'P':
+                            if (select_output_format(&outputFormat, CDIE_OUTPUT_PLAIN, "-p")) options.result_as_plain_text = 1;
+                            else nResult = CR_INVALIDPARAMETER;
+                            break;
                         case 's': bShowDatabase = 1; break;
 
                         case 'D': {
@@ -312,8 +547,8 @@ int x_main(int argc, char *argv[])
                                 pVal = argv[++i];
                             }
                             if (pVal) {
-                                xx_rt_free(options.pMainDatabasePath);
-                                options.pMainDatabasePath = cdie_strdup(pVal);
+                                xx_rt_free(options.main_database_path);
+                                options.main_database_path = cdie_strdup(pVal);
                             } else {
                                 xx_rt_fprintf(xx_rt_stderr(), "Option -D requires an argument\n");
                                 nResult = CR_INVALIDPARAMETER;
@@ -330,8 +565,8 @@ int x_main(int argc, char *argv[])
                                 pVal = argv[++i];
                             }
                             if (pVal) {
-                                xx_rt_free(options.pExtraDatabasePath);
-                                options.pExtraDatabasePath = cdie_strdup(pVal);
+                                xx_rt_free(options.extra_database_path);
+                                options.extra_database_path = cdie_strdup(pVal);
                             } else {
                                 xx_rt_fprintf(xx_rt_stderr(), "Option -E requires an argument\n");
                                 nResult = CR_INVALIDPARAMETER;
@@ -348,8 +583,8 @@ int x_main(int argc, char *argv[])
                                 pVal = argv[++i];
                             }
                             if (pVal) {
-                                xx_rt_free(options.pCustomDatabasePath);
-                                options.pCustomDatabasePath = cdie_strdup(pVal);
+                                xx_rt_free(options.custom_database_path);
+                                options.custom_database_path = cdie_strdup(pVal);
                             } else {
                                 xx_rt_fprintf(xx_rt_stderr(), "Option -C requires an argument\n");
                                 nResult = CR_INVALIDPARAMETER;
@@ -376,124 +611,228 @@ int x_main(int argc, char *argv[])
         }
     }
 
-    {
-        char *pMain = resolve_database_path(options.pMainDatabasePath, "db");
-        char *pExtra = resolve_database_path(options.pExtraDatabasePath, "db_extra");
-        char *pCustom = resolve_database_path(options.pCustomDatabasePath, "db_custom");
+    if (nResult != CR_SUCCESS) {
+        xx_scan_options_free(&options);
+        free_string_vector(&vecTargets);
+        free_string_vector(&vecFiles);
+        return cdie_finish_result(nResult);
+    }
 
-        xx_rt_free(options.pMainDatabasePath);
-        xx_rt_free(options.pExtraDatabasePath);
-        xx_rt_free(options.pCustomDatabasePath);
-        options.pMainDatabasePath = pMain;
-        options.pExtraDatabasePath = pExtra;
-        options.pCustomDatabasePath = pCustom;
+    if (bShowHelp || bShowVersion) {
+        if (bShowHelp && bShowVersion) {
+            xx_rt_fprintf(xx_rt_stderr(), "--help and --version are mutually exclusive\n");
+            nResult = CR_INVALIDPARAMETER;
+        } else if ((outputFormat == CDIE_OUTPUT_JSON) ||
+                   (outputFormat == CDIE_OUTPUT_XML)) {
+            print_structured_information(outputFormat, bShowHelp);
+        } else if (bShowHelp) {
+            print_help();
+        } else {
+            cdie_printf("%s %s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
+        }
+        xx_scan_options_free(&options);
+        free_string_vector(&vecTargets);
+        free_string_vector(&vecFiles);
+        return cdie_finish_result(nResult);
+    }
+
+    {
+        char *pMain = resolve_database_path(options.main_database_path, "db");
+        char *pExtra = resolve_database_path(options.extra_database_path, "db_extra");
+        char *pCustom = resolve_database_path(options.custom_database_path, "db_custom");
+
+        xx_rt_free(options.main_database_path);
+        xx_rt_free(options.extra_database_path);
+        xx_rt_free(options.custom_database_path);
+        options.main_database_path = pMain;
+        options.extra_database_path = pExtra;
+        options.custom_database_path = pCustom;
     }
 
     if (pCreateTarPath) {
-        if (!db_create_tar(options.pMainDatabasePath, pCreateTarPath)) {
+        if (!db_create_tar(options.main_database_path, pCreateTarPath)) {
             xx_rt_fprintf(xx_rt_stderr(), "Failed to create TAR database from '%s' to '%s'\n",
-                          options.pMainDatabasePath, pCreateTarPath);
+                          options.main_database_path, pCreateTarPath);
             nResult = CR_CANNOTFINDDATABASE;
-        } else {
-            xx_rt_printf("Successfully created TAR database: %s\n", pCreateTarPath);
+        } else if ((outputFormat != CDIE_OUTPUT_JSON) && (outputFormat != CDIE_OUTPUT_XML)) {
+            cdie_printf("Successfully created TAR database: %s\n", pCreateTarPath);
         }
-        scan_options_free(&options);
+        if (outputFormat == CDIE_OUTPUT_JSON) {
+            cdie_printf("{\"operation\":\"create-tar\",\"path\":");
+            print_json_string(pCreateTarPath);
+            cdie_printf(",\"success\":%s}\n", nResult == CR_SUCCESS ? "true" : "false");
+        } else if (outputFormat == CDIE_OUTPUT_XML) {
+            cdie_printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<create-tar path=\"");
+            print_xml_string(pCreateTarPath);
+            cdie_printf("\" success=\"%s\"/>\n", nResult == CR_SUCCESS ? "true" : "false");
+        }
+        xx_scan_options_free(&options);
         free_string_vector(&vecTargets);
         free_string_vector(&vecFiles);
-        return nResult;
+        return cdie_finish_result(nResult);
     }
 
     if (pCreateBcTarPath) {
-        if (!db_create_tar_precompiled(options.pMainDatabasePath, pCreateBcTarPath)) {
+        if (!db_create_tar_precompiled(options.main_database_path, pCreateBcTarPath)) {
             xx_rt_fprintf(xx_rt_stderr(), "Failed to create precompiled TAR database from '%s' to '%s'\n",
-                          options.pMainDatabasePath, pCreateBcTarPath);
+                          options.main_database_path, pCreateBcTarPath);
             nResult = CR_CANNOTFINDDATABASE;
-        } else {
-            xx_rt_printf("Successfully created precompiled TAR database: %s\n", pCreateBcTarPath);
+        } else if ((outputFormat != CDIE_OUTPUT_JSON) && (outputFormat != CDIE_OUTPUT_XML)) {
+            cdie_printf("Successfully created precompiled TAR database: %s\n", pCreateBcTarPath);
         }
-        scan_options_free(&options);
+        if (outputFormat == CDIE_OUTPUT_JSON) {
+            cdie_printf("{\"operation\":\"create-precompiled-tar\",\"path\":");
+            print_json_string(pCreateBcTarPath);
+            cdie_printf(",\"success\":%s}\n", nResult == CR_SUCCESS ? "true" : "false");
+        } else if (outputFormat == CDIE_OUTPUT_XML) {
+            cdie_printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<create-precompiled-tar path=\"");
+            print_xml_string(pCreateBcTarPath);
+            cdie_printf("\" success=\"%s\"/>\n", nResult == CR_SUCCESS ? "true" : "false");
+        }
+        xx_scan_options_free(&options);
         free_string_vector(&vecTargets);
         free_string_vector(&vecFiles);
-        return nResult;
+        return cdie_finish_result(nResult);
     }
 
     if ((xx_list_count(&vecTargets) == 0) && (!bShowDatabase)) {
-        print_help();
-        scan_options_free(&options);
+        if ((outputFormat == CDIE_OUTPUT_JSON) ||
+            (outputFormat == CDIE_OUTPUT_XML)) {
+            print_structured_information(outputFormat, 1);
+        } else {
+            print_help();
+        }
+        xx_scan_options_free(&options);
         free_string_vector(&vecTargets);
         free_string_vector(&vecFiles);
 
         /* An unknown option already set nResult; do not report success. */
-        return nResult;
+        return cdie_finish_result(nResult);
     }
 
-    bDatabaseLoaded = db_load(&db, options.pMainDatabasePath, DB_MAIN);
+    bDatabaseLoaded = db_load(&db, options.main_database_path, DB_MAIN);
 
-    if (options.bUseExtraDatabase) {
-        db_load(&db, options.pExtraDatabasePath, DB_EXTRA);
+    if (options.use_extra_database) {
+        db_load(&db, options.extra_database_path, DB_EXTRA);
     }
 
-    if (options.bUseCustomDatabase) {
-        db_load(&db, options.pCustomDatabasePath, DB_CUSTOM);
+    if (options.use_custom_database) {
+        db_load(&db, options.custom_database_path, DB_CUSTOM);
     }
 
     db_sort(&db);
 
     if (!bDatabaseLoaded) {
-        xx_rt_fprintf(xx_rt_stderr(), "Cannot load database: %s\n", options.pMainDatabasePath);
+        xx_rt_fprintf(xx_rt_stderr(), "Cannot load database: %s\n", options.main_database_path);
         nResult = CR_CANNOTFINDDATABASE;
-    }
-
-    if (bShowDatabase) {
-        show_database(&db, &options);
     }
 
     for (i = 0; i < (int)xx_list_count(&vecTargets); i++) {
         const char *pTarget = string_at(&vecTargets, (size_t)i);
 
         if (cdie_path_exists(pTarget)) {
-            cdie_find_files(pTarget, &vecFiles, options.bRecursiveScan);
+            cdie_find_files(pTarget, &vecFiles, options.recursive_scan);
         } else {
-            xx_rt_printf("Cannot find: %s\n", pTarget);
+            if ((outputFormat == CDIE_OUTPUT_JSON) || (outputFormat == CDIE_OUTPUT_XML)) {
+                xx_rt_fprintf(xx_rt_stderr(), "Cannot find: %s\n", pTarget);
+            } else {
+                cdie_printf("Cannot find: %s\n", pTarget);
+            }
             nResult = CR_CANNOTFINDFILE;
         }
     }
 
+    bStructuredWrapper = ((outputFormat == CDIE_OUTPUT_JSON) ||
+                          (outputFormat == CDIE_OUTPUT_XML)) &&
+                         (bShowDatabase || (xx_list_count(&vecFiles) != 1));
+    if (bStructuredWrapper) {
+        if (outputFormat == CDIE_OUTPUT_JSON) {
+            cdie_printf("{\n");
+            if (bShowDatabase) {
+                show_database(&db, &options, outputFormat);
+                cdie_printf(",\n");
+            }
+            cdie_printf("  \"files\": [");
+        } else {
+            cdie_printf("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<cdie>\n");
+            if (bShowDatabase) show_database(&db, &options, outputFormat);
+            cdie_printf("  <files>\n");
+        }
+    } else if (bShowDatabase) {
+        show_database(&db, &options, outputFormat);
+    }
+
     for (i = 0; i < (int)xx_list_count(&vecFiles); i++) {
         const char *pFileName = string_at(&vecFiles, (size_t)i);
-        ScanResult result;
+        xx_scan_result result;
         char *pOutput = NULL;
 
-        if (xx_list_count(&vecFiles) > 1) {
+        if ((xx_list_count(&vecFiles) > 1) && !bStructuredWrapper) {
             char *pNative = cdie_path_native(pFileName);
 
-            xx_rt_printf("%s:\n", pNative);
+            cdie_printf("%s:\n", pNative);
             xx_rt_free(pNative);
         }
 
         if (!die_engine_scan_file(pFileName, &db, &options, &result)) {
-            xx_rt_printf("Cannot open: %s\n", pFileName);
+            if ((outputFormat == CDIE_OUTPUT_JSON) || (outputFormat == CDIE_OUTPUT_XML)) {
+                xx_rt_fprintf(xx_rt_stderr(), "Cannot open: %s\n", pFileName);
+            } else {
+                cdie_printf("Cannot open: %s\n", pFileName);
+            }
             nResult = CR_CANNOTOPENFILE;
             continue;
         }
 
-        if (options.bResultAsJSON) {
-            pOutput = die_engine_format_json(&result, &options);
-        } else if (options.bResultAsXML) {
-            pOutput = die_engine_format_xml(&result, &options);
-        } else if (options.bResultAsCSV) {
+        if (options.result_as_json) {
+            pOutput = xx_scan_format_json(&result, &options);
+        } else if (options.result_as_xml) {
+            pOutput = xx_scan_format_xml(&result, &options);
+        } else if (options.result_as_csv) {
             /* diec separates CSV fields with a semicolon, not a comma. */
-            pOutput = die_engine_format_csv(&result, &options, ';');
-        } else if (options.bResultAsTSV) {
-            pOutput = die_engine_format_csv(&result, &options, '\t');
-        } else {
-            pOutput = die_engine_format_text(&result, &options);
+            pOutput = xx_scan_format_csv(&result, &options, ';');
+        } else if (options.result_as_tsv) {
+            pOutput = xx_scan_format_csv(&result, &options, '\t');
+        } else if (outputFormat != CDIE_OUTPUT_TEXT) {
+            pOutput = xx_scan_format_text(&result, &options);
         }
 
-        xx_rt_printf("%s", pOutput);
+        if (bStructuredWrapper && (outputFormat == CDIE_OUTPUT_JSON)) {
+            if (nStructuredFiles++) cdie_printf(",");
+            cdie_printf("\n    {\"path\":");
+            print_json_string(pFileName);
+            cdie_printf(",\"result\":");
+        } else if (bStructuredWrapper && (outputFormat == CDIE_OUTPUT_XML)) {
+            cdie_printf("    <file path=\"");
+            print_xml_string(pFileName);
+            cdie_printf("\">");
+        }
 
-        if (options.bResultAsJSON || options.bResultAsXML) {
-            xx_rt_printf("\n");
+        if (outputFormat == CDIE_OUTPUT_TEXT) {
+            /* Native Windows colors act on direct console writes. Flush the
+             * runtime's buffered headers first, then restore colors/mode before
+             * diagnostics or the next file. Redirected streams remain plain. */
+            if (xx_rt_fflush(xx_rt_stdout()) != 0) g_bStdoutFailed = 1;
+            if (!g_bStdoutFailed) {
+                xx_terminal_state terminal = xx_terminal_init(XX_TERMINAL_STDOUT);
+                if (xx_scan_print_text(&result, &options, &terminal, NULL) != XXFC_OK)
+                    g_bStdoutFailed = 1;
+                if (xx_terminal_flush(&terminal) != XXFC_OK) g_bStdoutFailed = 1;
+                xx_terminal_finish(&terminal);
+            }
+        } else {
+            cdie_printf("%s", pOutput ? pOutput :
+                         (outputFormat == CDIE_OUTPUT_JSON ? "{}" : ""));
+        }
+
+        if (bStructuredWrapper && (outputFormat == CDIE_OUTPUT_JSON)) {
+            cdie_printf("}");
+        } else if (bStructuredWrapper && (outputFormat == CDIE_OUTPUT_XML)) {
+            cdie_printf("    </file>\n");
+        }
+
+        if ((options.result_as_json || options.result_as_xml) && !bStructuredWrapper) {
+            cdie_printf("\n");
         }
 
         xx_rt_free(pOutput);
@@ -504,18 +843,30 @@ int x_main(int argc, char *argv[])
             /* diec reports script/progress errors after the detections on
              * stdout, regardless of --messages, and still exits successfully. */
             for (j = 0; j < result.nErrorCount; j++) {
-                xx_rt_printf("%s\n", result.ppErrors[j]);
+                if ((outputFormat == CDIE_OUTPUT_JSON) || (outputFormat == CDIE_OUTPUT_XML)) {
+                    xx_rt_fprintf(xx_rt_stderr(), "%s\n", result.ppErrors[j]);
+                } else {
+                    cdie_printf("%s\n", result.ppErrors[j]);
+                }
             }
         }
 
-        xx_rt_printf("\n");
-        scan_result_free(&result);
+        if (!bStructuredWrapper) cdie_printf("\n");
+        xx_scan_result_free(&result);
+    }
+
+    if (bStructuredWrapper) {
+        if (outputFormat == CDIE_OUTPUT_JSON) {
+            cdie_printf("\n  ]\n}\n");
+        } else {
+            cdie_printf("  </files>\n</cdie>\n");
+        }
     }
 
     free_string_vector(&vecTargets);
     free_string_vector(&vecFiles);
     db_free(&db);
-    scan_options_free(&options);
+    xx_scan_options_free(&options);
 
-    return nResult;
+    return cdie_finish_result(nResult);
 }

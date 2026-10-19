@@ -2,7 +2,8 @@
 
 ## Requirements
 
-A C11 compiler and CMake 3.16+. No Qt or code generation is required. The
+A C11 compiler and CMake 3.16+. The CRT-free MSVC ARM64 build needs CMake
+3.26+ for `ASM_MARMASM`. No Qt or code generation is required. The
 xxfclib engine uses `cdisasm` for x86 instruction decoding and Intel text
 formatting. CMake builds `cdisasm` from source with xxfclib and links it
 statically, so it adds no DLL dependency. In the local source layout,
@@ -14,8 +15,9 @@ source tree.
 The earlier scanner build was tested with MSVC 19.44 (Visual Studio 2022) on
 Windows and GCC 11.4 on Linux, with identical scan output. The `cdisasm`
 version builds with Clang 21 on Linux and passes the two available CDiE tests.
-Recheck corpus parity after the decoder migration. Windows and macOS builds
-have not yet been exercised with this decoder.
+Recheck corpus parity after the decoder migration. The console and Cocoa GUI
+also build with AppleClang on macOS ARM64; the GUI smoke test exercises a
+native Mach-O scan. This does not replace a full corpus parity run.
 
 The CDiE sources compile as **strict ISO C99** — `CMAKE_C_EXTENSIONS` is `OFF`,
 so GCC gets `-std=c99` rather than `-std=gnu99` for those sources. The xxfclib
@@ -39,6 +41,41 @@ cmake --build cdie_build
 
 The binary lands in `cdie_build/src/console/cdie` (`.exe` on Windows).
 
+### macOS GUI
+
+Use Xcode Command Line Tools (including the macOS SDK and Objective-C compiler)
+and CMake 3.20+ for the xxwidgets Cocoa backend. The GUI is built automatically:
+
+```bash
+cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release \
+  -DCDIE_DATABASE_DIR=/path/to/Detect-It-Easy
+cmake --build cdie_build --parallel
+open cdie_build/src/gui/cdie_gui.app
+```
+
+`CDIE_DATABASE_DIR` contains `db/`, optionally `db_extra/` and `db_custom/`.
+The app copies these into `Contents/Resources` when linked, so it can be moved
+and opened from Finder. Without an explicit path it uses the bundled dependency
+or the local sibling database, like the console package. Set the option to
+`NONE` to omit databases and select external folders using **Database paths**.
+Successful folder selections are saved in the app's macOS preferences.
+
+The GUI provides file picking, file drops, Finder/Dock file opening, a parser
+selector, the result tree, full text reports, scan options and optimization
+settings. Cmd+O opens a file; Cmd+R, F5 or Return scans it. The Windows Explorer
+integration is specific to the Windows front end.
+
+Run the Cocoa smoke test in a logged-in desktop session:
+
+```bash
+cdie_build/src/gui/cdie_gui.app/Contents/MacOS/cdie_gui --smoke-test \
+  cdie_build/src/console/cdie
+```
+
+It checks bundled database loading, scanning, explicit Binary selection, report
+contents and missing-file recovery. With `CDIE_BUILD_TESTS=ON` it is also
+registered as the `gui_cocoa` CTest test when a database is available.
+
 ### Windows, MSVC + Ninja
 
 ```bat
@@ -49,13 +86,14 @@ ninja -C cdie_build
 
 ### The CRT-free Windows build
 
-On 64-bit MSVC the executable links **no C runtime at all**: the option
-`CDIE_NO_CRT` defaults to `ON`, the entry point becomes `x_entry_point`
-instead of `mainCRTStartup`, and the only import is `KERNEL32.dll`.
+On native x64 and ARM64 MSVC the executable links **no C runtime at all**:
+the option `CDIE_NO_CRT` defaults to `ON`, the entry point becomes
+`x_entry_point` instead of `mainCRTStartup`, and the only import is
+`KERNEL32.dll`.
 
 ```text
 > dumpbin /imports cdie.exe
-    KERNEL32.dll   23 functions
+    KERNEL32.dll
 ```
 
 The link flags that produce this live in `src/console/CMakeLists.txt`:
@@ -68,8 +106,9 @@ Turn it off if you need to link something that expects a runtime:
 cmake -S cdie_source -B cdie_build -DCDIE_NO_CRT=OFF
 ```
 
-It is already off for 32-bit MSVC, for non-MSVC compilers and for every
-non-Windows target — see [LIMITATIONS.md](LIMITATIONS.md#runtime) for why.
+It is already off for Win32 and ARM64EC MSVC, for non-MSVC compilers and for
+every non-Windows target — see [LIMITATIONS.md](LIMITATIONS.md#runtime) for
+why.
 
 Only the console `cdie` executable is CRT-free. The libraries (below) link the
 dynamic CRT so they interoperate with normally-compiled consumers.
@@ -78,11 +117,10 @@ Two rules apply when adding code that will be compiled into this build:
 
 * **No standard library calls**, including implicit ones. Go through the `x_`
   stubs in `core/utils.h`.
-* **No stack frame over 4 KB.** Stack probes come from the CRT, so a large
-  frame walks past the guard page. `/Gs` is deliberately *not* used to raise
-  the probe threshold: without it an oversized frame fails at link time with
-  an unresolved `__chkstk`, which is a much better failure than a stack
-  overflow at run time.
+* The freestanding xxfclib build supplies the compiler helpers needed by each
+  supported architecture: a page-by-page `__chkstk` probe on x64 and ARM64,
+  plus the ARM64 interlocked operations MSVC emits out of line. Large frames
+  therefore retain normal Windows guard-page growth without importing the CRT.
 
 ### Windows GUI
 
@@ -90,9 +128,11 @@ The Windows build also produces `src/gui/cdie_gui.exe`. Its native front end
 uses `dep/xxwidgets` when populated, otherwise the sibling
 `../_mylibs/xxwidgets` (override `CDIE_XXWIDGETS_DIR` when it is elsewhere).
 The reusable `xxwidgets_scan_panel` provides a result tree, Flags
-and Databases checkbox combo boxes, and Scan and Report buttons. Each file
-contains detection nodes with Type, Name, Version, and Info details. Report
-opens the full formatted engine output and supports copying it.
+and Databases checkbox combo boxes, and Scan and Report buttons. The detected
+format is the root, with colored `Type: Name (Version) [Info]` detection rows.
+Overlay nodes contain their format, offset, size and nested detections. This
+tree layout is shared with macOS and the GTK/TUI widget backends. Report opens
+the full formatted engine output and supports copying it.
 
 Flags and optional database selections take effect on the next scan; the main
 database is always used. Options edits the same values and keeps both combo

@@ -23,8 +23,10 @@ through xxfclib. Both libraries build from source with the scanner, and the
 decoder adds no runtime library dependency.
 
 On Windows it goes one step further: the runtime layer is Win32 only, and the
-64-bit MSVC build links no C runtime at all — the finished executable imports
-**23 functions from `KERNEL32.dll` and nothing else**. That includes its own
+native MSVC x64 and ARM64 builds link no C runtime at all. The current Release
+console executable imports **50 functions on x64 and 51 on ARM64, all from
+`KERNEL32.dll`**; ARM64 adds `IsProcessorFeaturePresent` for its CPU feature
+switches. That includes its own
 correctly-rounded `strtod`/`dtoa` and its own libm. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#the-runtime-layer).
 
@@ -72,6 +74,31 @@ PE64
     Debug data: Records[CodeView, VC Feature, POGO]
 ```
 
+## macOS GUI
+
+The macOS build also produces `src/gui/cdie_gui.app`. Open the app in Finder,
+choose a file with **Open** (Cmd+O), or drop a file onto its window or Dock icon.
+Window drops use the shared xxwidgets file-drop event on macOS and Windows,
+including over the result tree and path field. A drop starts scanning the first
+file; if several files are dropped together, the remaining files are ignored.
+Press **Scan** (Cmd+R or F5), select another file type to rescan, or open
+**Report** for the complete engine output. The native Cocoa front end reuses
+the xxwidgets scan panel, result tree, scan options and optimization dialogs.
+
+The result tree starts with the detected format and shows one compact
+`Type: Name (Version) [Info]` row per detection. Heuristic markers and category
+colors are preserved. Overlay scans appear as expandable children with their
+format, hexadecimal offset and size, followed by their own detections. Windows
+uses the same tree model; xxwidgets also renders it in GTK and terminal UIs.
+Category colors come from the C port of XScanEngine in
+`xxfclib/src/scan/xx_scan_color.c`, with its light/dark defaults, protection
+aliases and malware background colors.
+
+The app bundles the signature databases selected by `CDIE_DATABASE_DIR` and
+finds them independently of the working directory. **Database paths** can load
+other signature folders; successful choices are remembered for later runs.
+See [docs/BUILDING.md](docs/BUILDING.md#macos-gui) for build and smoke-test commands.
+
 ## Windows GUI
 
 `cdie_gui.exe` uses the reusable xxwidgets scan panel and options dialogs.
@@ -82,9 +109,17 @@ choices for the current run; Cancel preserves the previous values.
 
 **Optimization** sets the general memory buffer and file I/O buffer sizes
 through value comboboxes, including 1 KiB, 2 KiB, 4 KiB and 8 KiB. It also
-controls SSE2 and AVX2 acceleration. A switch is disabled when the CPU or OS
-does not support it. OK updates xxfclib's runtime settings for subsequent
-scans; Cancel keeps the previous settings.
+controls SSE2, SSE4.2, AVX2, AES-NI, SHA-NI, VPCLMULQDQ, Arm NEON, Arm CRC32,
+Arm AES/SHA crypto and Arm Dot Product acceleration preferences.
+SHA-NI applies to SHA-1 and SHA-256; VPCLMULQDQ applies to CRC64 when AVX2
+is also enabled. On Arm builds the six x86 controls are hidden, leaving only
+the four Arm controls. On x86 and x64 builds the four Arm controls are hidden,
+leaving only the six x86 controls. A visible switch is disabled when the build,
+CPU or OS does not support it. The four Arm switches expose hardware-gated runtime preferences;
+scan algorithms do not consume them yet. **Defaults** restores both buffers to
+64 KiB and enables every acceleration option supported by the current CPU and
+operating system. OK updates xxfclib's runtime settings for subsequent scans;
+Cancel keeps the settings that were active before the dialog opened.
 
 **Context menu** enables or removes the current-user Explorer entry
 **Scan with cdie**, following XOptions' quoted executable and file-argument
@@ -103,18 +138,34 @@ cdie_gui.exe "C:\path with spaces\sample.exe"
 cdie [options] target
 ```
 
-The common xxfclib terminal options `--sse2` / `--nosse2` and `--avx2` /
-`--noavx2` enable or disable acceleration before scanning. Supported features
-are on by default; switches for unsupported CPU or OS features are accepted and
-ignored. The last switch for each feature wins. `--no-sse2` and `--no-avx2` are
-also accepted. For example, to scan with both accelerators disabled:
+The common xxfclib terminal options enable or disable acceleration preferences
+before scanning. X86 builds expose SSE2, SSE4.2, AVX2, AES-NI, SHA-NI, and
+VPCLMULQDQ. Arm builds expose NEON, CRC32, AES/SHA crypto, and dot-product.
+Options for the other architecture are hidden and rejected. Supported features
+are on by default; switches for a CPU or OS feature unavailable on the current
+machine are accepted and ignored. The last switch for each feature wins.
+
+Disable every x86 preference with:
 
 ```bash
-cdie --nosse2 --noavx2 -D /path/to/Detect-It-Easy/db /path/to/target.exe
+cdie --nosse2 --nosse42 --noavx2 --noaes --nosha --novpclmulqdq -D /path/to/Detect-It-Easy/db /path/to/target.exe
 ```
 
-Use `--` before a target whose name starts with a dash. The shared `--color` /
-`--nocolor` switches are accepted, although cdie's result output stays plain.
+Disable every Arm preference with:
+
+```bash
+cdie --noneon --noarmcrc32 --noarmcrypto --noarmdotprod --noarmpmull -D /path/to/Detect-It-Easy/db /path/to/target.exe
+```
+
+Hyphenated `--no-*` spellings are accepted. Arm features may be enabled with
+`--arm-crc32`, `--arm-crypto`, `--arm-dotprod`, and `--arm-pmull`; SSE4.2 also accepts
+`--sse4.2`, `--nosse4.2`, and `--no-sse4.2`.
+
+Use `--` before a target whose name starts with a dash. Normal terminal output
+colors each detection using XScanEngine's category rules and console palette.
+`--nocolor` disables colors; `--color` enables them again. Redirected output,
+`--plaintext`, JSON, XML, CSV and TSV remain plain. ANSI terminals and native
+Windows consoles are supported, and colors are restored after every row.
 
 The short options are the ones `diec` uses, so existing command lines work
 unchanged. Note that several are not the mnemonic you would guess — `-a` is
@@ -145,6 +196,12 @@ accepted as an alias (shown in parentheses) except where it would collide.
 | `-C`, `--customdatabase <path>` | custom database directory |
 | `-s`, `--showdatabase` | print database paths and signature counts |
 
+Output formats are mutually exclusive and may be selected only once. JSON and
+XML remain single documents when several files are scanned; the multi-file
+form records each path with its scan result. They also cover version/help,
+database reports and database TAR creation without mixing plain text into
+standard output.
+
 `diec`'s `-S`/`--struct`, `-w`/`--showstructs`, `-e`/`--entropy`,
 `-i`/`--info`, `--test` and `--createtest` are not ported; see
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
@@ -153,7 +210,8 @@ When a database path is not given, `cdie` looks for `db`, `db_extra` and
 `db_custom` next to the executable and then in the working directory.
 
 Exit codes follow the original tool: `0` success, `1` file not found,
-`2` cannot open file, `3` database not found, `4` invalid parameter.
+`2` cannot open file, `3` database not found, `4` invalid parameter. This port
+also returns `5` when writing or flushing standard output fails.
 
 ---
 
@@ -233,3 +291,9 @@ cdie_source/
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+ARM64 builds also expose `--armpmull` / `--noarmpmull` (aliases
+`--arm-pmull` / `--no-arm-pmull`) and **Use Arm PMULL** in Optimization.
+PMULL is enabled when detected. The accelerated CRC32/CRC32C paths require
+both Arm CRC32 and PMULL enabled, and apply to buffers of at least 3072 bytes.
+Disabling either feature retains the existing fallback paths.

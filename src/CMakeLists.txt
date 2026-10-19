@@ -44,8 +44,8 @@ set(CDIE_LIB_SOURCES "${CDIE_LIB_SOURCES}" PARENT_SCOPE)
 
 add_subdirectory(console)
 
-# Windows-only native GUI front end (xxwidgets). Reuses CDIE_LIB_SOURCES,
+# Native desktop GUI front ends (xxwidgets). Reuse CDIE_LIB_SOURCES,
 # which is in scope here (defined above), so no PARENT_SCOPE plumbing is needed.
-if(WIN32)
+if(WIN32 OR APPLE)
     add_subdirectory(gui)
 endif()

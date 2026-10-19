@@ -1,6 +1,5 @@
 # build output
 build/
-build_linux/
 cmake-build-*/
 
 # packaging: only finished artefacts belong in release/, and even those are
@@ -34,3 +33,4 @@ Makefile
 
 # internal notes, not part of the shipped package
 private_docs/
+private_tests/

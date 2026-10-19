@@ -22,18 +22,25 @@
 #ifndef GLOBAL_H
 #define GLOBAL_H
 
+#ifndef X_APPLICATIONDISPLAYNAME
 #define X_APPLICATIONDISPLAYNAME "cdie"
+#endif
+#ifndef X_APPLICATIONNAME
 #define X_APPLICATIONNAME        "cdie"
+#endif
+#ifndef X_APPLICATIONVERSION
 #define X_APPLICATIONVERSION     "4.0.0"
+#endif
 #define X_ORGANIZATIONNAME       "NTInfo"
 #define X_ORGANIZATIONDOMAIN     "ntinfo.biz"
 
-/* Exit codes, mirroring the original console tool. */
+/* Exit codes 0-4 mirror the original console tool. */
 #define CR_SUCCESS            0
 #define CR_CANNOTFINDFILE     1
 #define CR_CANNOTOPENFILE     2
 #define CR_CANNOTFINDDATABASE 3
 #define CR_INVALIDPARAMETER   4
+#define CR_CANNOTWRITEOUTPUT  5
 
 /* The program entry point. src/core/utils_entry.c calls this from either
  * main() or the CRT-free x_entry_point; src/console/main_console.c defines it.
