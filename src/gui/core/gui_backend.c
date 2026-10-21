@@ -152,6 +152,13 @@ int gui_backend_signature_count(void)
     return g_db.nCount;
 }
 
+const char* gui_backend_signature_name(int index)
+{
+  (void)index;
+  /* TODO: return the index-th signature name/label from the loaded database */
+  return NULL;
+}
+
 const char *gui_backend_app_title(void)
 {
     return X_APPLICATIONDISPLAYNAME " " X_APPLICATIONVERSION;

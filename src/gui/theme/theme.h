@@ -6,6 +6,8 @@
 #include <windows.h>
 #endif
 
+#include "xxwidgets/xxwidgets_theme.h"
+
 #define CLR_BG              PL_RGB(0x1F,0x21,0x2E)
 #define CLR_SIDEBAR_BG      PL_RGB(0x17,0x17,0x23)
 #define CLR_SIDEBAR_SEL     PL_RGB(0x2B,0x2B,0x35)
@@ -41,6 +43,8 @@
 #define TABBAR_H        46   /* tab strip                                */
 #define BOTTOMBAR_H     56   /* action bar at bottom                     */
 #define CONTENT_PAD     20   /* left/right padding inside content area   */
+
+#define FONT_UI_PT   9    /* base UI font size for all custom-drawn panels */
 
 #ifdef _WIN32
 #define TH_CR(c) RGB(((c) >> 16) & 255, ((c) >> 8) & 255, (c) & 255)
@@ -193,5 +197,18 @@ static __inline HFONT th_font(int pt, int bold, const WCHAR* face)
 }
 
 #endif /* _WIN32 */
+
+static __inline void apply_xx_theme(xxwidgets_app* app)
+{
+  xxwidgets_theme t;
+  t.background = CLR_BG;
+  t.surface = CLR_PANEL;
+  t.border = CLR_PANEL_BORDER;
+  t.text = CLR_TEXT_PRIMARY;
+  t.text_muted = CLR_TEXT_SECONDARY;
+  t.accent = CLR_ACCENT;
+  t.dark = 1;
+  xxwidgets_app_set_theme(app, &t);
+}
 
 #endif /* CDIE_THEME_H */

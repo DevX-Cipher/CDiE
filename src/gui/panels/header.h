@@ -7,6 +7,7 @@ typedef struct Header Header;
 
 Header* header_create(void* parent_native, int x, int y, int w, int h,
   HeaderBrowseCb cb, void* user);
+void header_set_time(Header* d, unsigned int msec);
 void      header_destroy(Header* hd);
 PlWidget* header_widget(const Header* hd);
 void      header_set_path(Header* hd, const char* folder_utf8,

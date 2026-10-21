@@ -75,13 +75,65 @@ static gboolean on_leave(GtkWidget *da, GdkEventCrossing *ev, gpointer p)
 static gboolean on_button(GtkWidget *da, GdkEventButton *ev, gpointer p)
 {
     PlWidget *w = (PlWidget *)p;
-    (void)da;
+    if (w->ops.key) gtk_widget_grab_focus(da);
     if (ev->button == 1 && w->ops.mouse_down)
         w->ops.mouse_down(w->user, (int)ev->x, (int)ev->y);
     return TRUE;
 }
 
-static void on_alloc(GtkWidget *da, GdkRectangle *a, gpointer p)
+static int map_key(guint kv)
+{
+  switch (kv) {
+  case GDK_KEY_Left: case GDK_KEY_KP_Left:   return PL_KEY_LEFT;
+  case GDK_KEY_Right: case GDK_KEY_KP_Right: return PL_KEY_RIGHT;
+  case GDK_KEY_Up: case GDK_KEY_KP_Up:       return PL_KEY_UP;
+  case GDK_KEY_Down: case GDK_KEY_KP_Down:   return PL_KEY_DOWN;
+  case GDK_KEY_Page_Up:   return PL_KEY_PGUP;
+  case GDK_KEY_Page_Down: return PL_KEY_PGDN;
+  case GDK_KEY_Home: return PL_KEY_HOME;
+  case GDK_KEY_End:  return PL_KEY_END;
+  case GDK_KEY_BackSpace: return PL_KEY_BACK;
+  case GDK_KEY_Delete:    return PL_KEY_DEL;
+  case GDK_KEY_Tab:       return PL_KEY_TAB;
+  case GDK_KEY_Return: case GDK_KEY_KP_Enter: return PL_KEY_ENTER;
+  case GDK_KEY_Escape: return PL_KEY_ESC;
+  case GDK_KEY_F3:     return PL_KEY_F3;
+  default: return -1;
+  }
+}
+
+static gboolean on_key_ev(GtkWidget* da, GdkEventKey* ev, gpointer p)
+{
+  PlWidget* w = (PlWidget*)p;
+  int mods = 0, key;
+  uint32_t ch;
+  (void)da;
+  if (!w->ops.key) return FALSE;
+  if (ev->state & GDK_CONTROL_MASK) mods |= PL_MOD_CTRL;
+  if (ev->state & GDK_SHIFT_MASK)   mods |= PL_MOD_SHIFT;
+  key = map_key(ev->keyval);
+  if (key >= 0) { w->ops.key(w->user, key, 0, mods); return TRUE; }
+  ch = gdk_keyval_to_unicode(ev->keyval);
+  if (ch) { w->ops.key(w->user, PL_KEY_CHAR, ch, mods); return TRUE; }
+  return FALSE;
+}
+
+static gboolean on_scroll_ev(GtkWidget* da, GdkEventScroll* ev, gpointer p)
+{
+  PlWidget* w = (PlWidget*)p;
+  int delta = 0, mods = 0;
+  (void)da;
+  if (!w->ops.wheel) return FALSE;
+  if (ev->direction == GDK_SCROLL_UP) delta = 1;
+  else if (ev->direction == GDK_SCROLL_DOWN) delta = -1;
+  else if (ev->direction == GDK_SCROLL_SMOOTH) delta = ev->delta_y < 0 ? 1 : ev->delta_y > 0 ? -1 : 0;
+  if (!delta) return FALSE;
+  if (ev->state & GDK_SHIFT_MASK) mods |= PL_MOD_SHIFT;
+  w->ops.wheel(w->user, (int)ev->x, (int)ev->y, delta, mods);
+  return TRUE;
+}
+
+static void on_alloc(GtkWidget* da, GdkRectangle* a, gpointer p)
 {
     PlWidget *w = (PlWidget *)p;
     (void)da;
@@ -109,7 +161,11 @@ PlWidget *pl_widget_create(void *parent_native, const PlWidgetOps *ops, void *us
     w->da = gtk_drawing_area_new();
     gtk_widget_set_size_request(w->da, width, height);
     gtk_widget_add_events(w->da, GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK |
-                                 GDK_LEAVE_NOTIFY_MASK);
+      GDK_LEAVE_NOTIFY_MASK | GDK_KEY_PRESS_MASK |
+      GDK_SCROLL_MASK);
+    if (w->ops.key) gtk_widget_set_can_focus(w->da, TRUE);
+    g_signal_connect(w->da, "key-press-event", G_CALLBACK(on_key_ev), w);
+    g_signal_connect(w->da, "scroll-event", G_CALLBACK(on_scroll_ev), w);
     g_signal_connect(w->da, "draw", G_CALLBACK(on_draw), w);
     g_signal_connect(w->da, "motion-notify-event", G_CALLBACK(on_motion), w);
     g_signal_connect(w->da, "leave-notify-event", G_CALLBACK(on_leave), w);
@@ -327,4 +383,76 @@ void pl_text(PlCanvas *c, PlFont *f, PlRect r, const char *s, PlColor col, int f
     pango_cairo_show_layout(c->cr, l);
     g_object_unref(l);
 }
+struct PlWindow {
+  GtkWidget* win, * sw, * fixed;
+  void (*on_size)(void*, int, int);
+  void (*on_close)(void*);
+  void* user;
+  GMainLoop* loop;
+};
+
+static gboolean pl_win_delete(GtkWidget* w, GdkEvent* e, gpointer p)
+{
+  PlWindow* pw = (PlWindow*)p;
+  (void)w; (void)e;
+  if (pw->on_close) pw->on_close(pw->user); else pl_window_close(pw);
+  return TRUE;
+}
+
+static void pl_win_alloc(GtkWidget* w, GdkRectangle* a, gpointer p)
+{
+  PlWindow* pw = (PlWindow*)p;
+  (void)w;
+  if (pw->on_size) pw->on_size(pw->user, a->width, a->height);
+}
+
+PlWindow* pl_window_create(void* owner, const char* title, int w, int h, int minw, int minh,
+  void (*on_size)(void*, int, int), void (*on_close)(void*), void* user)
+{
+  PlWindow* pw = (PlWindow*)g_malloc0(sizeof * pw);
+  pw->on_size = on_size; pw->on_close = on_close; pw->user = user;
+  pw->win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+  gtk_window_set_title(GTK_WINDOW(pw->win), title ? title : "");
+  gtk_window_set_default_size(GTK_WINDOW(pw->win), w, h);
+  gtk_widget_set_size_request(pw->win, minw, minh);
+  if (owner && GTK_IS_WINDOW((GtkWidget*)owner)) {
+    gtk_window_set_transient_for(GTK_WINDOW(pw->win), GTK_WINDOW((GtkWidget*)owner));
+    gtk_window_set_modal(GTK_WINDOW(pw->win), TRUE);
+  }
+  pw->sw = gtk_scrolled_window_new(NULL, NULL);
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(pw->sw), GTK_POLICY_EXTERNAL, GTK_POLICY_EXTERNAL);
+  pw->fixed = gtk_fixed_new();
+  gtk_container_add(GTK_CONTAINER(pw->sw), pw->fixed);
+  gtk_container_add(GTK_CONTAINER(pw->win), pw->sw);
+  g_signal_connect(pw->win, "delete-event", G_CALLBACK(pl_win_delete), pw);
+  g_signal_connect(pw->sw, "size-allocate", G_CALLBACK(pl_win_alloc), pw);
+  return pw;
+}
+
+void* pl_window_client(PlWindow* pw) { return pw ? pw->fixed : NULL; }
+
+void pl_window_run_modal(PlWindow* pw)
+{
+  if (!pw) return;
+  gtk_widget_show_all(pw->win);
+  pw->loop = g_main_loop_new(NULL, FALSE);
+  g_main_loop_run(pw->loop);
+  g_main_loop_unref(pw->loop);
+  pw->loop = NULL;
+}
+
+void pl_window_close(PlWindow* pw)
+{
+  if (!pw) return;
+  if (pw->loop && g_main_loop_is_running(pw->loop)) g_main_loop_quit(pw->loop);
+  gtk_widget_hide(pw->win);
+}
+
+void pl_window_destroy(PlWindow* pw)
+{
+  if (!pw) return;
+  if (pw->win) gtk_widget_destroy(pw->win);
+  g_free(pw);
+}
+
 #endif /* !_WIN32 && !__APPLE__ */

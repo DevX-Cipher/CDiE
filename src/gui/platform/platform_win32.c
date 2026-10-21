@@ -8,10 +8,7 @@
 #include <windows.h>
 #include <stdlib.h>
 #include "platform/platform.h"
-
-#ifdef _MSC_VER
-#pragma comment(lib, "msimg32.lib")   
-#endif
+#include <dwmapi.h>
 
 #define PL_CLASS L"CDiE_PlWidget"
 
@@ -89,9 +86,65 @@ static LRESULT CALLBACK pl_proc(HWND hw, UINT m, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_LBUTTONDOWN:
-        if (w && w->ops.mouse_down)
-            w->ops.mouse_down(w->user, (short)LOWORD(lp), (short)HIWORD(lp));
-        return 0;
+      SetFocus(hw);
+      if (w && w->ops.mouse_down)
+        w->ops.mouse_down(w->user, (short)LOWORD(lp), (short)HIWORD(lp));
+      return 0;
+
+    case WM_KEYDOWN: {
+      int key = PL_KEY_NONE, mods = 0;
+      uint32_t ch = 0;
+      if (!w || !w->ops.key) break;
+      if (GetKeyState(VK_CONTROL) < 0) mods |= PL_MOD_CTRL;
+      if (GetKeyState(VK_SHIFT) < 0) mods |= PL_MOD_SHIFT;
+      switch (wp) {
+      case VK_BACK:   key = PL_KEY_BACK;  break;
+      case VK_DELETE: key = PL_KEY_DEL;   break;
+      case VK_TAB:    key = PL_KEY_TAB;   break;
+      case VK_RETURN: key = PL_KEY_ENTER; break;
+      case VK_ESCAPE: key = PL_KEY_ESC;   break;
+      case VK_LEFT:   key = PL_KEY_LEFT;  break;
+      case VK_RIGHT:  key = PL_KEY_RIGHT; break;
+      case VK_UP:     key = PL_KEY_UP;    break;
+      case VK_DOWN:   key = PL_KEY_DOWN;  break;
+      case VK_HOME:   key = PL_KEY_HOME;  break;
+      case VK_END:    key = PL_KEY_END;   break;
+      case VK_PRIOR:  key = PL_KEY_PGUP;  break;
+      case VK_NEXT:   key = PL_KEY_PGDN;  break;
+      case VK_F3:     key = PL_KEY_F3;    break;
+      default:
+        if ((mods & PL_MOD_CTRL) && wp >= 'A' && wp <= 'Z') {
+          key = PL_KEY_CHAR; ch = (uint32_t)wp + 32;
+        }
+      }
+      if (key == PL_KEY_NONE) break;
+      w->ops.key(w->user, key, ch, mods);
+      return 0;
+    }
+
+    case WM_CHAR: {
+      static WCHAR hi;                          /* first half of a surrogate pair */
+      uint32_t cp = (uint32_t)wp;
+      if (!w || !w->ops.key) break;
+      if (cp < 32 || cp == 127) return 0;       /* control keys are handled in WM_KEYDOWN */
+      if (cp >= 0xD800 && cp <= 0xDBFF) { hi = (WCHAR)cp; return 0; }
+      if (cp >= 0xDC00 && cp <= 0xDFFF) {
+        cp = 0x10000 + (((uint32_t)hi - 0xD800) << 10) + (cp - 0xDC00);
+        hi = 0;
+      }
+      w->ops.key(w->user, PL_KEY_CHAR, cp, 0);
+      return 0;
+    }
+
+    case WM_MOUSEWHEEL: {
+      POINT pt;
+      if (!w || !w->ops.wheel) break;
+      pt.x = (short)LOWORD(lp); pt.y = (short)HIWORD(lp);
+      ScreenToClient(hw, &pt);                  /* wheel coords arrive in screen space */
+      w->ops.wheel(w->user, pt.x, pt.y, GET_WHEEL_DELTA_WPARAM(wp) / WHEEL_DELTA,
+        GetKeyState(VK_SHIFT) < 0 ? PL_MOD_SHIFT : 0);
+      return 0;
+    }
 
     case WM_SETCURSOR:
         if (w && w->ops.hand_cursor_at && LOWORD(lp) == HTCLIENT) {
@@ -189,19 +242,20 @@ void pl_invalidate(PlWidget *w, const PlRect *r)
     }
 }
 
-PlFont *pl_font_create(int pt, int bold)
+
+PlFont* pl_font_create(int pt, int bold)
 {
-    PlFont *f = (PlFont *)calloc(1, sizeof *f);
-    HDC dc;
-    int height;
-    if (!f) return NULL;
-    dc = GetDC(NULL);
-    height = -MulDiv(pt, GetDeviceCaps(dc, LOGPIXELSY), 72);
-    ReleaseDC(NULL, dc);
-    f->h = CreateFontW(height, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
-                       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                       CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    return f;
+  PlFont* f = (PlFont*)calloc(1, sizeof * f);
+  HDC dc;
+  int height;
+  if (!f) return NULL;
+  dc = GetDC(NULL);
+  height = -MulDiv(pt, GetDeviceCaps(dc, LOGPIXELSY), 72);
+  ReleaseDC(NULL, dc);
+  f->h = CreateFontW(height, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL, FALSE, FALSE, FALSE,
+    DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+    CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+  return f;
 }
 
 void pl_font_destroy(PlFont *f)
@@ -213,11 +267,11 @@ void pl_font_destroy(PlFont *f)
 
 int pl_text_width(PlFont *f, const char *s)
 {
-    WCHAR buf[256];
+    WCHAR buf[1024];
     SIZE sz = { 0, 0 };
     HDC dc = GetDC(NULL);
     HFONT old = (HFONT)SelectObject(dc, f->h);
-    int n = to_wide(s, buf, 256);
+    int n = to_wide(s, buf, 1024);
     GetTextExtentPoint32W(dc, buf, n, &sz);
     SelectObject(dc, old);
     ReleaseDC(NULL, dc);
@@ -234,16 +288,6 @@ void pl_fill(PlCanvas *c, int l, int t, int r, int b, PlColor col)
     br = CreateSolidBrush(to_cr(col));
     FillRect(c->dc, &rc, br);
     DeleteObject(br);
-}
-
-void pl_line(PlCanvas *c, int x1, int y1, int x2, int y2, PlColor col)
-{
-    HPEN p = CreatePen(PS_SOLID, 1, to_cr(col));
-    HPEN op = (HPEN)SelectObject(c->dc, p);
-    MoveToEx(c->dc, x1, y1, NULL);
-    LineTo(c->dc, x2, y2);
-    SelectObject(c->dc, op);
-    DeleteObject(p);
 }
 
 static void aa_fill(HDC dc, int l, int t, int r, int b, COLORREF col)
@@ -324,8 +368,20 @@ void pl_round_rect(PlCanvas* c, PlRect r, PlColor fill, PlColor border, int radi
   }
 }
 
-void pl_ellipse(PlCanvas *c, int l, int t, int r, int b, PlColor fill, PlColor border)
+void pl_ellipse(PlCanvas* c, int l, int t, int r, int b, PlColor fill, PlColor border)
 {
+  int rr = (r - l) / 2;
+  if (fill != PL_NONE && (r - l) == (b - t)) {          /* circles: smooth path */
+    if (border != PL_NONE && border != fill) {
+      aa_shape(c->dc, l, t, r, b, rr, to_cr(border));
+      aa_shape(c->dc, l + 1, t + 1, r - 1, b - 1, rr - 1, to_cr(fill));
+    }
+    else {
+      aa_shape(c->dc, l, t, r, b, rr, to_cr(fill));
+    }
+    return;
+  }
+  {   /* fallback: original GDI path */
     HPEN p = make_pen(border), op;
     HBRUSH br = make_brush(fill), ob;
     op = (HPEN)SelectObject(c->dc, p);
@@ -334,6 +390,48 @@ void pl_ellipse(PlCanvas *c, int l, int t, int r, int b, PlColor fill, PlColor b
     SelectObject(c->dc, op); SelectObject(c->dc, ob);
     if (border != PL_NONE) DeleteObject(p);
     if (fill != PL_NONE) DeleteObject(br);
+  }
+}
+
+static void blend_px(HDC dc, int x, int y, COLORREF col, int a)   /* a = 0..256 */
+{
+  COLORREF d;
+  if (a <= 0) return;
+  d = GetPixel(dc, x, y);
+  if (d == CLR_INVALID) return;
+  SetPixelV(dc, x, y, RGB(
+    (GetRValue(col) * a + GetRValue(d) * (256 - a)) >> 8,
+    (GetGValue(col) * a + GetGValue(d) * (256 - a)) >> 8,
+    (GetBValue(col) * a + GetBValue(d) * (256 - a)) >> 8));
+}
+
+void pl_line(PlCanvas* c, int x1, int y1, int x2, int y2, PlColor col)
+{
+  COLORREF cr = to_cr(col);
+  int steep, t, x;
+  long dx, grad, y;
+
+  if (x1 == x2 || y1 == y2) {                           /* axis-aligned: plain GDI is exact */
+    HPEN p = CreatePen(PS_SOLID, 1, cr);
+    HPEN op = (HPEN)SelectObject(c->dc, p);
+    MoveToEx(c->dc, x1, y1, NULL);
+    LineTo(c->dc, x2, y2);
+    SelectObject(c->dc, op);
+    DeleteObject(p);
+    return;
+  }
+  steep = abs(y2 - y1) > abs(x2 - x1);                  /* anti-aliased diagonal (Wu) */
+  if (steep) { t = x1; x1 = y1; y1 = t; t = x2; x2 = y2; y2 = t; }
+  if (x1 > x2) { t = x1; x1 = x2; x2 = t; t = y1; y1 = y2; y2 = t; }
+  dx = x2 - x1;
+  grad = (((long)(y2 - y1)) << 16) / dx;
+  y = ((long)y1) << 16;
+  for (x = x1; x <= x2; ++x) {
+    int yi = (int)(y >> 16), f = (int)((y & 0xFFFF) >> 8);
+    if (steep) { blend_px(c->dc, yi, x, cr, 256 - f); blend_px(c->dc, yi + 1, x, cr, f); }
+    else { blend_px(c->dc, x, yi, cr, 256 - f); blend_px(c->dc, x, yi + 1, cr, f); }
+    y += grad;
+  }
 }
 
 void pl_image(PlCanvas* c, int x, int y, int w, int h,
@@ -402,11 +500,11 @@ void pl_image(PlCanvas* c, int x, int y, int w, int h,
 
 void pl_text(PlCanvas *c, PlFont *f, PlRect r, const char *s, PlColor col, int flags)
 {
-    WCHAR buf[256];
+    WCHAR buf[1024];
     RECT rc;
     UINT fl = DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
     HFONT old;
-    int n = to_wide(s, buf, 256);
+    int n = to_wide(s, buf, 1024);
 
     rc.left = r.l; rc.top = r.t; rc.right = r.r; rc.bottom = r.b;
     if (flags & PL_TEXT_CENTER)   fl |= DT_CENTER;
@@ -416,6 +514,153 @@ void pl_text(PlCanvas *c, PlFont *f, PlRect r, const char *s, PlColor col, int f
     old = (HFONT)SelectObject(c->dc, f->h);
     DrawTextW(c->dc, buf, n, &rc, fl);
     SelectObject(c->dc, old);
+}
+
+/* ================= top-level modal window ================= */
+
+#define PLWIN_CLASS L"PlModalWindow"
+
+struct PlWindow {
+  HWND hwnd, owner;
+  int  done, ready, min_w, min_h;
+  void (*on_size)(void* u, int w, int h);
+  void (*on_close)(void* u);
+  void* user;
+};
+
+static int s_win_class_registered;
+
+static LRESULT CALLBACK plwin_proc(HWND h, UINT m, WPARAM wp, LPARAM lp)
+{
+  PlWindow* w = (PlWindow*)GetWindowLongPtrW(h, GWLP_USERDATA);
+
+  switch (m) {
+  case WM_NCCREATE:
+    SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)((CREATESTRUCTW*)lp)->lpCreateParams);
+    break;
+
+  case WM_SIZE:
+    /* ignored until run_modal: the child widget does not exist during creation */
+    if (w && w->ready && wp != SIZE_MINIMIZED && w->on_size)
+      w->on_size(w->user, (int)LOWORD(lp), (int)HIWORD(lp));
+    return 0;
+
+  case WM_GETMINMAXINFO:
+    if (w) {
+      MINMAXINFO* mi = (MINMAXINFO*)lp;
+      RECT r = { 0, 0, w->min_w, w->min_h };          /* min_w/min_h are client size */
+      AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
+      mi->ptMinTrackSize.x = r.right - r.left;
+      mi->ptMinTrackSize.y = r.bottom - r.top;
+    }
+    return 0;
+
+  case WM_SETFOCUS: {                                      /* keep keyboard focus on the widget */
+    HWND c = GetWindow(h, GW_CHILD);
+    if (c) SetFocus(c);
+    return 0;
+  }
+
+  case WM_ERASEBKGND:
+    return 1;
+
+  case WM_CLOSE:
+    if (w) {
+      if (w->on_close) w->on_close(w->user);
+      else w->done = 1;
+    }
+    return 0;                                            /* never let DefWindowProc destroy it */
+  }
+  return DefWindowProcW(h, m, wp, lp);
+}
+
+PlWindow* pl_window_create(void* owner_native, const char* title, int w, int h,
+  int min_w, int min_h,
+  void (*on_size)(void* u, int w, int h),
+  void (*on_close)(void* u), void* user)
+{
+  PlWindow* win;
+  WCHAR wtitle[256];
+  BOOL dark = TRUE;
+  COLORREF cap = RGB(0x1F, 0x21, 0x2E), capText = RGB(0xEC, 0xEC, 0xF8);
+  HINSTANCE inst = GetModuleHandleW(NULL);
+
+  if (!s_win_class_registered) {
+    WNDCLASSW wc;
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = plwin_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.lpszClassName = PLWIN_CLASS;
+    if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return NULL;
+    s_win_class_registered = 1;
+  }
+
+  win = (PlWindow*)calloc(1, sizeof * win);
+  if (!win) return NULL;
+  win->owner = (HWND)owner_native;
+  win->min_w = min_w; win->min_h = min_h;
+  win->on_size = on_size; win->on_close = on_close; win->user = user;
+
+  to_wide(title ? title : "", wtitle, 256);
+  win->hwnd = CreateWindowExW(0, PLWIN_CLASS, wtitle,
+    WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    CW_USEDEFAULT, CW_USEDEFAULT, w, h,
+    win->owner, NULL, inst, win);
+  if (!win->hwnd) { free(win); return NULL; }
+
+  DwmSetWindowAttribute(win->hwnd, 20, &dark, sizeof(dark));        /* dark title bar */
+  DwmSetWindowAttribute(win->hwnd, 35, &cap, sizeof(cap));          /* caption colour */
+  DwmSetWindowAttribute(win->hwnd, 36, &capText, sizeof(capText));  /* caption text   */
+  return win;
+}
+
+void* pl_window_client(PlWindow* win)
+{
+  return win ? (void*)win->hwnd : NULL;
+}
+
+void pl_window_run_modal(PlWindow* win)
+{
+  MSG m;
+  RECT rc;
+  if (!win) return;
+
+  if (win->owner) EnableWindow(win->owner, FALSE);
+  ShowWindow(win->hwnd, SW_SHOW);
+
+  /* the child widget exists now: deliver the real client size once */
+  win->ready = 1;
+  GetClientRect(win->hwnd, &rc);
+  if (win->on_size) win->on_size(win->user, rc.right, rc.bottom);
+  SetFocus(win->hwnd);
+
+  while (!win->done) {
+    BOOL r = GetMessageW(&m, NULL, 0, 0);
+    if (r == 0) { PostQuitMessage((int)m.wParam); break; }   /* re-post WM_QUIT for the app */
+    if (r < 0) break;
+    TranslateMessage(&m);
+    DispatchMessageW(&m);
+  }
+}
+
+void pl_window_close(PlWindow* win)
+{
+  if (!win) return;
+  win->done = 1;
+  PostMessageW(win->hwnd, WM_NULL, 0, 0);                      /* wake GetMessage */
+}
+
+void pl_window_destroy(PlWindow* win)
+{
+  HWND owner;
+  if (!win) return;
+  owner = win->owner;
+  ShowWindow(win->hwnd, SW_HIDE);
+  if (owner) EnableWindow(owner, TRUE);                        /* before destroy so focus returns */
+  DestroyWindow(win->hwnd);
+  if (owner) SetForegroundWindow(owner);
+  free(win);
 }
 
 #endif /* _WIN32 */

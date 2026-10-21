@@ -57,6 +57,7 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
 
 /* Total number of signatures loaded across the three databases. */
 int gui_backend_signature_count(void);
+const char* gui_backend_signature_name(int index);
 
 /* "cdie <version>" (UTF-8) for the window title. Static storage; do not free. */
 const char *gui_backend_app_title(void);
