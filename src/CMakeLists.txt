@@ -42,10 +42,68 @@ list(REMOVE_ITEM CDIE_LIB_SOURCES
 set(CDIE_SOURCES "${CDIE_SOURCES}" PARENT_SCOPE)
 set(CDIE_LIB_SOURCES "${CDIE_LIB_SOURCES}" PARENT_SCOPE)
 
-add_subdirectory(console)
+# Both interactive frontends use the same widget library. A TUI-only build
+# selects its terminal backend without requiring a desktop toolkit.
+if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
+    if(CMAKE_VERSION VERSION_LESS 3.21)
+        message(FATAL_ERROR "cdie GUI/TUI builds require CMake 3.21 or newer")
+    endif()
+    if(NOT TARGET xxwidgets::xxwidgets)
+        set(_CDIE_DEFAULT_XXWIDGETS_DIR "${CMAKE_CURRENT_LIST_DIR}/../dep/xxwidgets")
+        if(NOT EXISTS "${_CDIE_DEFAULT_XXWIDGETS_DIR}/CMakeLists.txt")
+            set(_CDIE_DEFAULT_XXWIDGETS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../_mylibs/xxwidgets")
+        endif()
+        set(CDIE_XXWIDGETS_DIR "${_CDIE_DEFAULT_XXWIDGETS_DIR}"
+            CACHE PATH "Location of the xxwidgets source tree")
+        if(NOT EXISTS "${CDIE_XXWIDGETS_DIR}/CMakeLists.txt")
+            message(FATAL_ERROR "cdie GUI/TUI need xxwidgets. Set CDIE_XXWIDGETS_DIR to its source tree.")
+        endif()
+        function(cdie_add_widgets)
+            set(CMAKE_POLICY_DEFAULT_CMP0126 NEW)
+            set(XXWIDGETS_BUILD_EXAMPLES OFF)
+            set(XXWIDGETS_BUILD_TESTS OFF)
+            if(XXFCLIB_DIR)
+                set(XXWIDGETS_XXFCLIB_DIR "${XXFCLIB_DIR}")
+            endif()
+            if(NOT CDIE_BUILD_GUI)
+                set(XXWIDGETS_NATIVE_BACKEND none)
+            endif()
+            add_subdirectory("${CDIE_XXWIDGETS_DIR}" "${CMAKE_BINARY_DIR}/xxwidgets" EXCLUDE_FROM_ALL)
+        endfunction()
+        cdie_add_widgets()
+    endif()
+    if(MSVC AND CDIE_NO_CRT AND NOT BUILD_SHARED_LIBS)
+        # Every embedded widget object must match the hosted frontend's CRT.
+        foreach(_widget_target xxwidgets xxwidgets_io xxwidgets_history
+                xxwidgets_threads xxwidgets_codepages xxwidgets_scan_colors)
+            if(TARGET ${_widget_target})
+                set_property(TARGET ${_widget_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+            endif()
+        endforeach()
+    endif()
+endif()
 
-# Native desktop GUI front ends (xxwidgets). Reuse CDIE_LIB_SOURCES,
-# which is in scope here (defined above), so no PARENT_SCOPE plumbing is needed.
-if(WIN32 OR APPLE)
+# Place signature databases and notices beside standalone frontends, using
+# the same resource staging rules as the native macOS app bundle.
+set(_CDIE_RESOURCES_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/gui/bundle_resources.cmake")
+set(_CDIE_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+function(cdie_stage_frontend_resources target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+            "-DDATABASE_DIR=${CDIE_DATABASE_DIR}"
+            "-DRESOURCES_DIR=$<TARGET_FILE_DIR:${target}>"
+            "-DCDIE_SOURCE_DIR=${_CDIE_SOURCE_DIR}"
+            "-DCDISASM_DIR=${XXFC_CDISASM_DIR}"
+            -P "${_CDIE_RESOURCES_SCRIPT}"
+        VERBATIM)
+endfunction()
+
+if(CDIE_BUILD_CONSOLE)
+    add_subdirectory(console)
+endif()
+if(CDIE_BUILD_GUI)
     add_subdirectory(gui)
+endif()
+if(CDIE_BUILD_TUI)
+    add_subdirectory(tui)
 endif()

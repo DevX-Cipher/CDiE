@@ -209,6 +209,13 @@ Available on `DEX` inputs.
 `isFirstWrapperScan()`, `getScanID()`, `getStartOffset()`,
 `isOverlay()`, `isResource()`, `isDebugData()`, `isFilePart()`.
 
+For resource child scans, `isResource()` and `isFilePart()` return true.
+`getScanID()` returns the resource type name or decimal type ID (for example,
+`"10"` for a PE RC_DATA resource); this is separate from the result's numeric
+`scan_id`. Overlay children return true from `isOverlay()` and `isFilePart()`.
+Archive children return their member name from `getScanID()` and true from
+`isFilePart()`. Root and overlay scans return an empty `getScanID()` string.
+
 ## Utilities
 
 `upperCase(s)`, `lowerCase(s)`, `cleanString(s)`, `swapBytes(v)`,

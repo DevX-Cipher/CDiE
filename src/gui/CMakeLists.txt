@@ -4,19 +4,6 @@ if(APPLE)
     enable_language(OBJC)
 endif()
 
-if(NOT TARGET xxwidgets::xxwidgets)
-    set(_CDIE_DEFAULT_XXWIDGETS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../dep/xxwidgets")
-    if(NOT EXISTS "${_CDIE_DEFAULT_XXWIDGETS_DIR}/CMakeLists.txt")
-        set(_CDIE_DEFAULT_XXWIDGETS_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../_mylibs/xxwidgets")
-    endif()
-    set(CDIE_XXWIDGETS_DIR "${_CDIE_DEFAULT_XXWIDGETS_DIR}"
-        CACHE PATH "Location of the xxwidgets source tree")
-    if(NOT EXISTS "${CDIE_XXWIDGETS_DIR}/CMakeLists.txt")
-        message(FATAL_ERROR "cdie_gui needs xxwidgets. Set CDIE_XXWIDGETS_DIR to its source tree.")
-    endif()
-    add_subdirectory("${CDIE_XXWIDGETS_DIR}" "${CMAKE_BINARY_DIR}/xxwidgets" EXCLUDE_FROM_ALL)
-endif()
-
 if(APPLE)
     add_executable(cdie_gui MACOSX_BUNDLE
         ${CDIE_LIB_SOURCES} gui_backend.c main_gui_macos.m)

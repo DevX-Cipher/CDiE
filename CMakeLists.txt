@@ -35,6 +35,18 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(CDIE_WERROR "Treat compiler warnings as errors" OFF)
 
+option(CDIE_BUILD_CONSOLE "Build the command-line scanner" ON)
+option(CDIE_BUILD_TUI "Build the interactive terminal scanner" ON)
+set(_CDIE_GUI_DEFAULT OFF)
+if(WIN32 OR APPLE)
+    set(_CDIE_GUI_DEFAULT ON)
+endif()
+option(CDIE_BUILD_GUI "Build the native desktop scanner" ${_CDIE_GUI_DEFAULT})
+unset(_CDIE_GUI_DEFAULT)
+if(CDIE_BUILD_GUI AND NOT (WIN32 OR APPLE))
+    message(FATAL_ERROR "The cdie native GUI currently supports Windows and macOS; use the TUI on this platform")
+endif()
+
 # The comprehensive private Radare2 gate covers each local library with a
 # compatible upstream corpus: decoding/assembly, bytecode, demangling,
 # emulation and file formats. The older ASM-only switch remains available for
@@ -231,6 +243,9 @@ endif()
 option(CDIE_BUILD_TESTS "Build the runtime test executable" OFF)
 
 if(CDIE_BUILD_TESTS)
+    if(NOT CDIE_BUILD_CONSOLE)
+        message(FATAL_ERROR "CDIE_BUILD_TESTS requires CDIE_BUILD_CONSOLE=ON")
+    endif()
     if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt")
         enable_testing()
         add_subdirectory(tests)

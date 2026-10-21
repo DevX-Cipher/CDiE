@@ -8,6 +8,7 @@ add_executable(cdie
 target_include_directories(cdie PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
 
 target_link_libraries(cdie PRIVATE xxfclib::die_engine)
+cdie_stage_frontend_resources(cdie)
 
 # ---------------------------------------------------------------- no CRT ---
 #

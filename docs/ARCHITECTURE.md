@@ -191,10 +191,43 @@ See [JS_ENGINE.md](JS_ENGINE.md).
   selected input range, maps native file types to signature types, and owns
   callback results until their engine free callback is called.
 * `scan/xx_scan_engine.c` — common detection, callback dispatch, parent-format
-  passes, overlay scans, and result merging for native `xx_scan_*` callers.
+  passes, resource, archive and overlay child scans, and result merging for native
+  `xx_scan_*` callers. Child scans have distinct scan IDs, retain their parent's
+  ID, identify their origin with `scan_part`, and merge offsets into the input.
+* `scan/xx_scan_resources.c` — enumerates nonempty PE/.NET resources and ELF
+  GResources through the existing format streams, bounded by the selected
+  input range. `resources_scan` scans every stored payload once, before the
+  overlay pass. Child scans clear all optional traversal flags. Compressed
+  GResources are scanned as stored; other file types have no resource pass.
+  Resource type names or numeric type IDs reach signature scripts through
+  `getScanID()`, and `isResource()` identifies these child scans.
+  Malformed ranges, cancellation, allocation failure and more than 65,536
+  resource leaves fail the scan and discard partial results.
+* `scan/xx_scan_archives.c` — visits ZIP (also JAR/APK/IPA), LHA, GZIP, BZIP2
+  and Mach-O Fat children when `archives_scan` is enabled. Compressed output
+  uses memory only when its decoded size is less than
+  `xx_get_file_buffer_size()`. Equality or a larger size uses `xx_io_temp_open()`;
+  temporary storage is cleaned up after scanning and honors an active
+  memory-only policy. GZIP/BZIP2 output spills as its size becomes known.
+  ZIP Store, ordinary LHA LH0/LZ4 members and Mach-O Fat slices use bounded
+  `xx_io_sub` source views after required integrity validation. Masked LHA
+  payloads require decoding. Archive child scans use the selected device
+  directly, without copying small inputs into memory again. No archive-derived
+  output paths are opened. This storage threshold does not bound decoder
+  internal buffers. Concatenated GZIP/BZIP2 streams are one logical child.
+  Directories are skipped. Encryption, unsupported
+  methods, malformed data, checksum failures and limits fail the scan.
+  Defaults are 256 MiB per member, 1 GiB total and 100,000 entries; the
+  `archive_max_member_size`, `archive_max_total_size` and `archive_max_members`
+  options override these when nonzero. Native decoder limits still apply;
+  LHA compressed or masked payloads retain their 256 MiB decoded-member ceiling.
+  Children disable further traversal.
+  Records retain the member name, packed extent and compression state.
+  Compressed child offsets refer to decoded data; stored child offsets refer
+  to the original input. GUI, text and JSON output identify these separately.
 * `die_engine/xx_die_engine_legacy.c` — compatibility wrappers for existing
   callers. Default automatic scans preserve the Binary/COM fallback passes;
-  explicit file types run one interpretation. Parent-format or overlay flags
+  explicit file types run one interpretation. Parent-format, resource, archive or overlay flags
   route through the common scanner. The device wrapper restores the borrowed
   cursor, and memory scanning borrows the input until the synchronous call
   returns. Directory recursion remains the console's responsibility.

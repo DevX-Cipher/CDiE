@@ -74,6 +74,31 @@ PE64
     Debug data: Records[CodeView, VC Feature, POGO]
 ```
 
+## Terminal interface
+
+The `cdie_tui` target builds an interactive terminal scanner using `xxwidgets`
+and the same scan engine, options and colored result tree as the native GUI:
+
+```bash
+cmake --build cdie_build --target cdie_tui --parallel
+cdie_build/src/tui/cdie_tui /path/to/target
+```
+
+Use the file-path field and Scan control to scan another file, or Report to
+view the complete output. Enter or F5 scans the path; Tab moves between controls.
+Ctrl+O focuses the path field, Ctrl+R opens the full report, F1 displays keyboard
+help, and Ctrl+Q exits. Scans run on a worker thread with progress and cancellation.
+
+Run it in an interactive terminal; `--help` shows its options and shortcuts.
+`-D`, `-E`, and `-C` select the main, extra, and custom signature directories.
+Signature databases selected by `CDIE_DATABASE_DIR` are copied beside the console
+and TUI executables during linking. Without explicit paths, databases are resolved
+beside the executable or in the working directory.
+
+`CDIE_BUILD_CONSOLE`, `CDIE_BUILD_TUI`, and `CDIE_BUILD_GUI` select frontends.
+Console and TUI default to enabled; the GUI defaults to enabled on macOS and
+Windows. See [docs/BUILDING.md](docs/BUILDING.md#terminal-interface) for details.
+
 ## macOS GUI
 
 The macOS build also produces `src/gui/cdie_gui.app`. Open the app in Finder,

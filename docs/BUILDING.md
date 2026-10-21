@@ -39,12 +39,62 @@ cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release
 cmake --build cdie_build
 ```
 
-The binary lands in `cdie_build/src/console/cdie` (`.exe` on Windows).
+The console binary lands in `cdie_build/src/console/cdie` (`.exe` on Windows).
+The terminal frontend is `cdie_build/src/tui/cdie_tui`; macOS and Windows also
+build `cdie_gui`. Select frontends with `CDIE_BUILD_CONSOLE`, `CDIE_BUILD_TUI`,
+and `CDIE_BUILD_GUI`. Console and TUI default to ON; the native GUI defaults
+to ON only on macOS and Windows. GUI/TUI require CMake 3.21+ and `xxwidgets`
+(set `CDIE_XXWIDGETS_DIR` to override its location).
+
+For a console-only build, set `CDIE_BUILD_TUI=OFF` and `CDIE_BUILD_GUI=OFF`.
+Set `CDIE_BUILD_LIBRARY=OFF` as well to omit the separate library targets.
+TUI builds with `CDIE_BUILD_GUI=OFF` use the terminal backend without a native
+desktop toolkit.
+
+### Terminal interface
+
+```bash
+cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release \
+  -DCDIE_DATABASE_DIR=/path/to/Detect-It-Easy
+cmake --build cdie_build --target cdie cdie_tui cdie_gui --parallel
+cdie_build/src/tui/cdie_tui /path/to/target
+```
+
+The three-target build above applies to macOS and Windows. On Linux, omit
+`cdie_gui`. The TUI accepts an optional startup file and shares the scanner's
+engine, result tree, flag and database controls, and full report display.
+Use `cdie_tui --help` for terminal requirements and keyboard shortcuts.
+Run it in an interactive terminal rather than redirecting input or output;
+`--help` and `--version` also work with redirected output. On Windows, append
+`.exe` to the executable name.
+
+Enter or F5 scans the path, Tab switches controls, Ctrl+O focuses the path,
+Ctrl+R opens the complete report, F1 displays help, and Ctrl+Q quits. The shared
+scan panel provides flags, optional databases, a colored result tree and a
+cancellable progress dialog. Scans run on a worker thread. `-D`, `-E` and `-C`
+select signature directories; otherwise the executable-directory/working-directory
+search applies. The TUI uses a hosted C runtime, as the desktop GUI does.
+
+The build stages `db/`, `db_extra/`, and `db_custom/` from `CDIE_DATABASE_DIR`
+beside the console and TUI executables. The macOS GUI carries the same folders
+inside its app bundle. `CDIE_DATABASE_DIR=NONE` disables this staging.
+
+With the local thin wrapper, configure and build all three using:
+
+```bash
+cmake -S ~/ownCloud_build/cdie -B ~/ownCloud_build/cdie/build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCDIE_BUILD_GUI=ON -DCDIE_BUILD_TUI=ON -DCDIE_BUILD_CONSOLE=ON
+cmake --build ~/ownCloud_build/cdie/build --target cdie_gui cdie_tui cdie --parallel
+```
+
+The wrapper puts these outputs under `build/cdie/src/gui/`, `build/cdie/src/tui/`,
+and `build/cdie/src/console/`, respectively.
 
 ### macOS GUI
 
 Use Xcode Command Line Tools (including the macOS SDK and Objective-C compiler)
-and CMake 3.20+ for the xxwidgets Cocoa backend. The GUI is built automatically:
+and CMake 3.21+ for the xxwidgets Cocoa backend. The GUI is built automatically:
 
 ```bash
 cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release \
@@ -156,7 +206,7 @@ on by default:
 ```bash
 cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release
 cmake --build cdie_build           # builds cdie, die_shared, die_static
-cmake -S cdie_source -B cdie_build -DCDIE_BUILD_LIBRARY=OFF   # console only
+cmake -S cdie_source -B cdie_build -DCDIE_BUILD_LIBRARY=OFF   # frontends only
 ```
 
 See [LIBRARY.md](LIBRARY.md) for the API, the flag mapping and how to compile a
