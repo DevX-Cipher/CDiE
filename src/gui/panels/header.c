@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 #include "panels/header.h"
 #include "theme/theme.h"
@@ -15,6 +16,7 @@ struct Header {
   char           folder[MAX_HDR_STR];
   char           filename[MAX_HDR_STR];
   int            has_file;
+  char           timestr[32];
   int            width, height;
   PlFont* fontCrumb, * fontFilename, * fontBrowse;
 };
@@ -49,6 +51,14 @@ static void on_paint(void* u, PlCanvas* c, int w, int h)
       CLR_TEXT_SECONDARY, TXT_LEFT);
     pl_text(c, d->fontFilename, name, d->filename,
       CLR_TEXT_PRIMARY, TXT_LEFT);
+    if (d->timestr[0]) {
+      int nw = pl_text_width(d->fontFilename, d->filename);
+      int tx = CONTENT_PAD + nw + 12;
+      PlRect tr = { tx, 30, w - 70, h - 6 };
+      if (tx < w - 70 - 40)
+        pl_text(c, d->fontCrumb, tr, d->timestr,
+          CLR_TEXT_SECONDARY, TXT_LEFT);
+    }
   }
   else {
     PlRect r = { CONTENT_PAD, 0, w - 70, h };
@@ -140,6 +150,14 @@ void header_set_path(Header* d, const char* folder, const char* filename)
   copy_str(d->folder, sizeof d->folder, folder);
   copy_str(d->filename, sizeof d->filename, filename);
   d->has_file = (filename && filename[0]) ? 1 : 0;
+  d->timestr[0] = 0;                 /* new file: drop the old time */
+  pl_invalidate(d->w, NULL);
+}
+
+void header_set_time(Header* d, unsigned int msec)
+{
+  if (!d) return;
+  snprintf(d->timestr, sizeof d->timestr, "%u ms", msec);
   pl_invalidate(d->w, NULL);
 }
 
