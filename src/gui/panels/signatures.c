@@ -16,6 +16,8 @@
 #include "platform/platform.h"
 #include "panels/signatures.h"
 #include "core/gui_backend.h"
+#include "core/config.h" 
+#include "core/updater.h"
 #include "theme/theme.h"
 
 #define SG_BG     CLR_BG
@@ -46,6 +48,7 @@ static const PlColor s_cls_col[] = {
 
 enum { CL_TXT, CL_COM, CL_STR, CL_KEY, CL_FN, CL_NUM, CL_OBJ };
 
+#define BANNER_H 52
 #define HEAD_ED  38
 #define HEAD_OUT 34
 #define NCHIPS   5
@@ -59,7 +62,7 @@ enum { K_NORMAL, K_ACCENT, K_CHIP, K_SWITCH, K_LINK, K_DROP };
 enum {
   B_SAVE, B_RO, B_FIND, B_NEXT, B_CLEAR,
   B_CH0, B_CH1, B_CH2, B_CH3, B_CH4,
-  B_DROP, B_RUN, B_CLOSE, NB
+  B_DROP, B_RUN, B_CLOSE, B_UPD, NB
 };
 enum { F_TREE, F_ED, F_FILTER, F_FIND };
 
@@ -78,20 +81,20 @@ typedef struct Sig {
   Btn b[NB];
   Edit filter, find;
 
-  /* tree */
   Node* nodes; int nn, ncap;
   int* vis; int nvis;
   int count, tsel, ttop;
 
-  /* editor */
   char* buf; size_t len, cap;
   size_t* ls; char* blk; int nl, lscap;
   size_t caret, ma, mb;
   int top, hs, crlf, dirty;
   char cur[1024], type[64];
 
-  /* output */
   char* out[OUT_MAX]; int nout, oscroll;
+  Updater upd;
+  PlRect r_banner;
+  int auto_done;
 } Sig;
 
 static Sig* s_sig;
@@ -253,7 +256,9 @@ static int list_dir(const char* dir, DEnt** out)
   return n;
 }
 #else
+
 static FILE* fopen_u8(const char* path, const char* mode) { return fopen(path, mode); }
+
 static int list_dir(const char* dir, DEnt** out)
 {
   DIR* d = opendir(dir);
@@ -389,7 +394,7 @@ static int add_dir(Sig* s, int parent, int depth, const char* dir, const char* f
   DEnt* e = NULL;
   int n = list_dir(dir, &e), pass, i, total = 0;
   if (n > 1) qsort(e, (size_t)n, sizeof(DEnt), dent_cmp);
-  for (pass = 0; pass < 2; ++pass) {              /* folders first, then files */
+  for (pass = 0; pass < 2; ++pass) {              
     for (i = 0; i < n; ++i) {
       int isdir = e[i].isdir, idx;
       char* full;
@@ -416,7 +421,7 @@ static int add_dir(Sig* s, int parent, int depth, const char* dir, const char* f
 
 static void rebuild_tree(Sig* s)
 {
-  const char* root = gui_backend_main_db_path();
+  const char* root = config_db_required() ? NULL : gui_backend_main_db_path();
   node_trunc(s, 0);
   s->tsel = -1; s->ttop = 0;
   s->count = (root && root[0]) ? add_dir(s, -1, 0, root, s->filter.s) : 0;
@@ -561,7 +566,8 @@ static void ensure_visible(Sig* s)
 
 static void set_save_state(Sig* s)
 {
-  s->b[B_SAVE].enabled = !s->b[B_RO].on && s->dirty && s->cur[0];
+  s->b[B_SAVE].enabled = !s->b[B_RO].on && s->dirty && s->cur[0] &&
+    s->upd.phase != UPD_RUNNING;
 }
 
 static int buf_reserve(Sig* s, size_t need)
@@ -644,7 +650,7 @@ static void load_file(Sig* s, const char* path)
     else b[j++] = b[i];
   }
   if (!buf_reserve(s, j)) { free(b); return; }
-  memcpy(s->buf, b, j);                      /* b was compacted in place */
+  memcpy(s->buf, b, j);                     
   s->len = j;
   free(b);
 
@@ -704,7 +710,7 @@ static void do_find(Sig* s, int from_start)
     }
     if (k == nl) goto found;
   }
-  if (!from_start && start > 0) {                  /* wrap around */
+  if (!from_start && start > 0) {                  
     for (i = 0; i < start && i + nl <= s->len; ++i) {
       for (k = 0; k < nl; ++k) {
         int x = (unsigned char)s->buf[i + k], y = (unsigned char)needle[k];
@@ -918,7 +924,7 @@ static void paint_tree(Sig* s, PlCanvas* c)
     tr = mkr(x + 12, y, s->r_tree.r - 6, y + TROW);
     txt(c, s->font, col, tr, 0, n->name);
   }
-  /* thin scroll indicator */
+
   if (s->nvis > rows) {
     int th = s->r_tree.b - s->r_tree.t, bh = imax(24, th * rows / s->nvis);
     int by = s->r_tree.t + (th - bh) * s->ttop / imax(1, s->nvis - rows);
@@ -986,8 +992,95 @@ static void paint_editor(Sig* s, PlCanvas* c)
   }
 }
 
-static void on_paint(void* u, PlCanvas* c, int w, int h)
+static void upd_notify(void* u)      
 {
+  redraw((Sig*)u);
+}
+
+static void upd_poll(Sig* s)
+{
+  if (s->upd.db_changed) { s->upd.db_changed = 0; rebuild_tree(s); }
+#ifdef SIG_AUTO_UPDATE_TEST
+  if (s->upd.phase == UPD_READY && !s->auto_done) {
+    s->auto_done = 1;
+    updater_install(&s->upd);
+  }
+#endif
+}
+
+static void upd_sync_btn(Sig* s)
+{
+  Btn* b = &s->b[B_UPD];
+  switch (s->upd.phase) {
+  case UPD_READY:    b->kind = K_ACCENT; b->text = "Update";      b->enabled = 1; break;
+  case UPD_RUNNING:  b->kind = K_NORMAL; b->text = "Cancel";      b->enabled = 1; break;
+  case UPD_CHECKING: b->kind = K_NORMAL; b->text = "Checking";    b->enabled = 0; break;
+  case UPD_ERROR:    b->kind = K_NORMAL; b->text = "Retry";       b->enabled = 1; break;
+  default:           b->kind = K_NORMAL; b->text = "Check again"; b->enabled = 1; break;
+  }
+  set_save_state(s);
+}
+
+static void paint_banner(Sig* s, PlCanvas* c)
+{
+  Updater* u = &s->upd;
+  PlRect r = s->r_banner;
+  int cy = (r.t + r.b) / 2, x = r.l + 16, ph = u->phase, bl = s->b[B_UPD].r.l - 16;
+  char t[300];
+  const char* title = "Signature database";
+  PlColor green = PL_RGB(123, 224, 165), red = PL_RGB(242, 154, 147);
+  PlColor dcol = SG_TEXT2;
+
+  pl_round_rect(c, r, SG_PANEL, SG_BORDER, 12);
+
+  if (ph == UPD_RUNNING) {
+    int bx = x + 214, bw = bl - 56 - bx, fw = bw * u->pct / 100;
+    snprintf(t, sizeof(t), "%s...", u->label[0] ? u->label : "Updating");
+    txt(c, s->fontb, SG_TEXT, mkr(x, r.t, x + 204, r.b), 0, t);
+    if (bw > 20) {
+      pl_round_rect(c, mkr(bx, cy - 4, bx + bw, cy + 4), SG_BTNB, SG_BTNB, 4);
+      if (fw > 8) pl_round_rect(c, mkr(bx, cy - 4, bx + fw, cy + 4), SG_ACCENT, SG_ACCENT, 4);
+      snprintf(t, sizeof(t), "%d%%", u->pct);
+      txt(c, s->font, SG_TEXT, mkr(bx + bw + 6, r.t, bl, r.b), 2, t);
+    }
+    return;
+  }
+
+  if (ph == UPD_UPTODATE || ph == UPD_DONE) {
+    pl_ellipse(c, x, cy - 11, x + 22, cy + 11, PL_RGB(46, 158, 106), PL_RGB(46, 158, 106));
+    pl_line(c, x + 6, cy, x + 10, cy + 4, SG_WHITE);
+    pl_line(c, x + 10, cy + 4, x + 16, cy - 4, SG_WHITE);
+    x += 34;
+    dcol = SG_TEXT2;
+    if (ph == UPD_DONE) {
+      title = "Database updated";
+      snprintf(t, sizeof(t), "Now at %s  \xC2\xB7  %d added, %d changed  \xC2\xB7  your db_custom was not changed",
+        u->installed, u->added, u->changed);
+    }
+    else {
+      title = "Signature database is up to date";
+      snprintf(t, sizeof(t), "Version %s", u->installed);
+    }
+  }
+  else {
+    PlColor d = ph == UPD_ERROR ? red : ph == UPD_READY ? SG_ACCENT : SG_BTNB;
+    pl_ellipse(c, x, cy - 4, x + 9, cy + 5, d, d);
+    x += 23;
+    if (ph == UPD_READY)
+      snprintf(t, sizeof(t), "Installed %s  \xE2\x86\x92  latest %s",
+        u->installed[0] ? u->installed : "unknown", u->latest);
+    else if (ph == UPD_ERROR) { snprintf(t, sizeof(t), "%s", u->error); dcol = red; }
+    else if (ph == UPD_CHECKING) snprintf(t, sizeof(t), "Checking for updates...");
+    else snprintf(t, sizeof(t), "Not checked yet");
+  }
+  {
+    int tw = pl_text_width(s->fontb, title);
+    txt(c, s->fontb, SG_TEXT, mkr(x, r.t, x + tw + 4, r.b), 0, title);
+    txt(c, s->font, ph == UPD_DONE ? green : dcol, mkr(x + tw + 16, r.t, bl, r.b), 0, t);
+  }
+}
+
+static void on_paint(void* u, PlCanvas* c, int w, int h) {
   Sig* s = (Sig*)u;
   char t[96];
   const char* name;
@@ -995,6 +1088,8 @@ static void on_paint(void* u, PlCanvas* c, int w, int h)
   int i;
 
   s->W = w; s->H = h;
+  upd_poll(s);
+  upd_sync_btn(s);
   pl_fill(c, 0, 0, w, h, SG_BG);
 
   pl_round_rect(c, s->r_left, SG_PANEL, SG_BORDER, 12);
@@ -1039,7 +1134,11 @@ static void on_paint(void* u, PlCanvas* c, int w, int h)
   pl_fill(c, s->r_bar.l, s->r_bar.t, s->r_bar.r, s->r_bar.b, SG_BAR);
   pl_line(c, s->r_bar.l, s->r_bar.t, s->r_bar.r, s->r_bar.t, SG_SEP);
 
+  paint_banner(s, c);
   for (i = 0; i < NB; ++i) paint_btn(s, c, i);
+  if (s->upd.phase == UPD_RUNNING)
+    txt(c, s->font, SG_TEXT2, mkr(s->b[B_RO].r.r + 14, s->b[B_RO].r.t, s->r_findbox.l - 10, s->b[B_RO].r.b),
+      0, "Editing is locked while the database updates");
 
   if (s->popup) {
     PlRect p = mkr(s->b[B_DROP].r.l, s->b[B_DROP].r.t - 38, s->b[B_DROP].r.r, s->b[B_DROP].r.t - 4);
@@ -1053,16 +1152,20 @@ static void layout(Sig* s)
 {
   const int m = 12, lw = 300, barH = 56, bh = 34, gap = 12;
   const int nextW = 70, findW = 70, boxW = 260;
-  int W = s->W, H = s->H, bot = H - barH - m, rx, rw, y, top, gy, gh, by;
+  int W = s->W, H = s->H, bot = H - barH - m, rx, rw, y, top, gy, gh, by, ty;
 
-  s->r_left = mkr(m, m, m + lw, bot);
-  s->r_filter = mkr(m + 12, m + 12, m + lw - 12, m + 12 + bh);
+  s->r_banner = mkr(m, m, W - m, m + BANNER_H);
+  s->b[B_UPD].r = mkr(W - m - 16 - 110, m + 9, W - m - 16, m + 9 + bh);
+  ty = m + BANNER_H + gap;
+
+  s->r_left = mkr(m, ty, m + lw, bot);
+  s->r_filter = mkr(m + 12, ty + 12, m + lw - 12, ty + 12 + bh);
   s->r_tree = mkr(m + 8, s->r_filter.b + 8, m + lw - 8, bot - 8);
 
   rx = m + lw + gap;
   rw = W - rx - m;
   if (rw < 300) rw = 300;
-  y = m;
+  y = ty;
   s->b[B_SAVE].r = mkr(rx, y, rx + 80, y + bh);
   s->b[B_RO].r = mkr(rx + 92, y, rx + 202, y + bh);
   s->b[B_NEXT].r = mkr(rx + rw - nextW, y, rx + rw, y + bh);
@@ -1070,7 +1173,7 @@ static void layout(Sig* s)
   s->r_findbox = mkr(rx + rw - nextW - 8 - findW - 8 - boxW, y,
     rx + rw - nextW - 8 - findW - 8, y + bh);
 
-  top = m + bh + gap;
+  top = ty + bh + gap;
   s->r_edcard = mkr(rx, top, rx + rw, bot);
 
   gy = s->r_edcard.t + HEAD_ED + 8;
@@ -1102,12 +1205,17 @@ static void run_cmd(Sig* s, int id)
 {
   switch (id) {
   case B_SAVE: if (s->b[B_SAVE].enabled) save_file(s); break;
-  case B_RO: set_save_state(s); break;                 /* switch already toggled */
+  case B_RO: set_save_state(s); break;                 
   case B_FIND: do_find(s, 1); break;
   case B_NEXT: do_find(s, 0); break;
   case B_CLEAR: out_clear(s); break;
   case B_RUN: out_log(s, "Run is not connected to the scan engine yet."); break;
   case B_DROP: s->popup = 1; break;
+  case B_UPD:
+    if (s->upd.phase == UPD_READY) updater_install(&s->upd);
+    else if (s->upd.phase == UPD_RUNNING) updater_cancel(&s->upd);
+    else updater_check(&s->upd);
+    break;
   case B_CLOSE: s->done = 1; pl_window_close(s->win); break;
   default: break;                                      
   }
@@ -1211,6 +1319,7 @@ static void ed_key(Sig* s, int key, uint32_t ch, int mods)
   int ro = s->b[B_RO].on, l, vc;
   size_t p;
   if (!s->cur[0] || !s->buf) return;
+  if (s->upd.phase == UPD_RUNNING) return;          
   l = find_line(s, s->caret);
 
   switch (key) {
@@ -1297,6 +1406,7 @@ static void on_key(void* u, int key, uint32_t ch, int mods)
 static void on_destroy(void* u)
 {
   Sig* s = (Sig*)u;
+  updater_shutdown(&s->upd);               
   node_trunc(s, 0);
   free(s->nodes); free(s->vis);
   free(s->buf); free(s->ls); free(s->blk);
@@ -1371,6 +1481,7 @@ void signatures_show(xxwidgets_app* app, xxwidgets_widget* owner)
   init_btn(s, B_DROP, K_DROP, "detect", 0, 1);
   init_btn(s, B_RUN, K_ACCENT, "Run", 0, 1);
   init_btn(s, B_CLOSE, K_NORMAL, "Close", 0, 1);
+  init_btn(s, B_UPD, K_NORMAL, "Checking", 0, 0);
 
   win = pl_window_create(ow, "Signatures", 1280, 780, 1000, 640, on_win_size, on_win_close, s);
   if (!win) { on_destroy(s); return; }
@@ -1378,6 +1489,8 @@ void signatures_show(xxwidgets_app* app, xxwidgets_widget* owner)
   s->w = pl_widget_create(pl_window_client(win), &s_ops, s, 0, 0, 1280, 780);
   if (!s->w) { pl_window_destroy(win); on_destroy(s); return; }
   s_sig = s;
+  updater_init(&s->upd, upd_notify, s);
+  updater_check(&s->upd);                   
 
   layout(s);
   rebuild_tree(s);
