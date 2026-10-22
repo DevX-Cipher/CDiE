@@ -163,15 +163,48 @@ static int* chk_ptr(Opt* o, int id)
 
 static int apply_all(Opt* o)
 {
+  int ok = 1;
   o->msg[0] = 0;
+
+  {
+    CdieConfig cfg;
+    int k;
+    config_load(&cfg);
+    snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", o->dbpath[0]);
+    snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", o->dbpath[1]);
+    snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", o->dbpath[2]);
+    cfg.has_prefs = 1;
+    cfg.deep = o->scan.deep;           cfg.heuristic = o->scan.heuristic;
+    cfg.verbose = o->scan.verbose;     cfg.aggressive = o->scan.aggressive;
+    cfg.hide_unknown = o->scan.hide_unknown; cfg.format = o->scan.format;
+    cfg.db_extra = o->scan.db_extra;   cfg.db_custom = o->scan.db_custom;
+    if (o->have_opt) {
+      cfg.use_sse2 = o->opt.use_sse2;  cfg.use_avx2 = o->opt.use_avx2;
+      cfg.buffer_size = (unsigned long long)o->opt.buffer_size;
+      cfg.file_buffer_size = (unsigned long long)o->opt.file_buffer_size;
+    }
+    if (o->have_fonts)
+      for (k = 0; k < OPTIONS_FONT_ROLES && k < CDIE_FONT_ROLES; ++k) {
+        snprintf(cfg.font_family[k], sizeof(cfg.font_family[k]), "%s", o->fonts[k].family);
+        cfg.font_size[k] = o->fonts[k].point_size;
+        cfg.font_bold[k] = o->fonts[k].bold;
+        cfg.font_italic[k] = o->fonts[k].italic;
+      }
+    if (!config_save(&cfg)) {
+      const char* cp = config_file_path();
+      snprintf(o->msg, sizeof(o->msg), "Could not save settings to %s", cp ? cp : "(unknown path)");
+      return 0;
+    }
+  }
+
   if (o->host.set_scan && !o->host.set_scan(o->host.user, &o->scan)) {
-    snprintf(o->msg, sizeof(o->msg), "Could not apply the scan options.");
-    return 0;
+    snprintf(o->msg, sizeof(o->msg), "Saved, but could not apply the scan options.");
+    ok = 0;
   }
   if (o->have_opt && o->host.set_optimization &&
     !o->host.set_optimization(o->host.user, &o->opt)) {
-    snprintf(o->msg, sizeof(o->msg), "Could not apply the optimization settings.");
-    return 0;
+    snprintf(o->msg, sizeof(o->msg), "Saved, but could not apply the optimization settings.");
+    ok = 0;
   }
   if (o->dbdirty) {
     if (!gui_backend_set_db_paths(o->dbpath[0], o->dbpath[1], o->dbpath[2])) {
@@ -181,24 +214,12 @@ static int apply_all(Opt* o)
     o->dbdirty = 0;
     if (o->host.db_changed) o->host.db_changed(o->host.user);
   }
-  {
-    CdieConfig cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", o->dbpath[0]);
-    snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", o->dbpath[1]);
-    snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", o->dbpath[2]);
-    if (!config_save(&cfg)) {
-      const char* cp = config_file_path();
-      snprintf(o->msg, sizeof(o->msg), "Could not save settings to %s", cp ? cp : "(unknown path)");
-      return 0;
-    }
-  }
   if (o->fontsdirty && o->host.set_fonts) {
     if (!o->host.set_fonts(o->host.user, o->fonts)) {
-      snprintf(o->msg, sizeof(o->msg), "Could not apply the fonts.");
-      return 0;
+      snprintf(o->msg, sizeof(o->msg), "Saved, but could not apply the fonts.");
+      ok = 0;
     }
-    o->fontsdirty = 0;
+    else o->fontsdirty = 0;
   }
   if (o->ctxdirty && o->host.context_set) {
     if (!o->host.context_set(o->host.user, o->ctxenabled)) {
@@ -207,14 +228,16 @@ static int apply_all(Opt* o)
         o->ctxactual = o->ctxenabled = actual;
       update_ctxmsg(o);
       snprintf(o->msg, sizeof(o->msg), "Could not update the Explorer menu.");
-      return 0;
+      ok = 0;
     }
-    o->ctxactual = o->ctxenabled;
-    o->ctxdirty = 0;
-    update_ctxmsg(o);
+    else {
+      o->ctxactual = o->ctxenabled;
+      o->ctxdirty = 0;
+      update_ctxmsg(o);
+    }
   }
-  snprintf(o->msg, sizeof(o->msg), "Settings applied.");
-  return 1;
+  if (ok) snprintf(o->msg, sizeof(o->msg), "Settings applied.");
+  return ok;
 }
 
 static void finish(Opt* o, int result)
@@ -600,6 +623,9 @@ static void on_paint(void* u, PlCanvas* c, int w, int h)
   if (o->msg[0])
     txt(c, o->font, CLR_TEXT_SECONDARY,
       mkr(16, o->r_bar.t, o->W - 3 * 80 - 40, o->r_bar.b), 0, o->msg);
+
+  for (i = 0; i < o->nit; ++i) paint_item(o, c, i);
+
   if (o->dd_open) paint_dropdown(o, c);
 }
 

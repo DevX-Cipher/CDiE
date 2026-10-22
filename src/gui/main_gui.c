@@ -588,11 +588,7 @@ static void do_scan(void)
     HeapFree(GetProcessHeap(), 0, path);
     report_ui_error("Read file name", status); return;
   }
-  status = read_panel_options();
-  if (status != XXWIDGETS_OK) {
-    HeapFree(GetProcessHeap(), 0, path);
-    report_ui_error("Read scan options", status); return;
-  }
+  apply_flags_to_backend();
   status = refresh_file_types(path);
   if (status == XXWIDGETS_OK) status = selected_file_type(&type_id);
   if (status != XXWIDGETS_OK) {
@@ -1180,11 +1176,6 @@ static void on_event(xxwidgets_app* app, const xxwidgets_event* event,
     else if (event->widget == g_reportButton) g_pending = ACTION_REPORT;
   }
   else if (event->type == XXWIDGETS_EVENT_CHANGE &&
-    (event->widget == g_flags || event->widget == g_databases)) {
-    xxwidgets_status status = read_panel_options();
-    if (status != XXWIDGETS_OK) report_ui_error("Read scan options", status);
-  }
-  else if (event->type == XXWIDGETS_EVENT_CHANGE &&
     event->widget == g_path && g_type) {
     xxwidgets_widget_set_enabled(g_type, 0);
   }
@@ -1350,15 +1341,52 @@ static void save_config_on_exit(void)
 {
   CdieConfig cfg;
   const char* m;
+  const char* e;
+  const char* c;
   if (config_db_required()) return;
+  config_load(&cfg);                 /* keep saved preferences */
   m = gui_backend_main_db_path();
-  const char* e = gui_backend_extra_db_path();
-  const char* c = gui_backend_custom_db_path();
-  memset(&cfg, 0, sizeof(cfg));
+  e = gui_backend_extra_db_path();
+  c = gui_backend_custom_db_path();
   snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", m ? m : "");
   snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", e ? e : "");
   snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", c ? c : "");
   config_save(&cfg);
+}
+
+static void apply_saved_prefs(void)
+{
+  CdieConfig cfg;
+  OptionsOptimization opt;
+  OptionsFont fonts[OPTIONS_FONT_ROLES];
+  int k;
+
+  if (!config_load(&cfg) || !cfg.has_prefs) return;
+
+  g_bFlagDeep = cfg.deep;           g_bFlagHeur = cfg.heuristic;
+  g_bFlagVerbose = cfg.verbose;     g_bFlagAggr = cfg.aggressive;
+  g_bFlagHideUnknown = cfg.hide_unknown; g_bFlagFormat = cfg.format;
+  g_bDbExtra = cfg.db_extra;        g_bDbCustom = cfg.db_custom;
+  apply_flags_to_backend();
+  sync_panel_options();
+
+  if (opt_get_opt(NULL, &opt)) {     /* fills has_sse2 / has_avx2 */
+    opt.buffer_size = (size_t)cfg.buffer_size;
+    opt.file_buffer_size = (size_t)cfg.file_buffer_size;
+    opt.use_sse2 = cfg.use_sse2 && opt.has_sse2;
+    opt.use_avx2 = cfg.use_avx2 && opt.has_avx2;
+    opt_set_opt(NULL, &opt);
+  }
+
+  if (opt_get_fonts(NULL, fonts)) {
+    for (k = 0; k < OPTIONS_FONT_ROLES && k < CDIE_FONT_ROLES; ++k) {
+      snprintf(fonts[k].family, sizeof(fonts[k].family), "%s", cfg.font_family[k]);
+      fonts[k].point_size = cfg.font_size[k];
+      fonts[k].bold = cfg.font_bold[k];
+      fonts[k].italic = cfg.font_italic[k];
+    }
+    opt_set_fonts(NULL, fonts);
+  }
 }
 
 int gui_run(void)
@@ -1411,6 +1439,7 @@ int gui_run(void)
   SetWindowPos(native(g_window), NULL, 0, 0, 1150, 700, SWP_NOMOVE | SWP_NOZORDER);
 
   db_ok = init_backend_with_config();
+  apply_saved_prefs();          /* before the status text, since set_fonts writes one */
   if (db_ok) {
     wsprintfW(ready, L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan.",
       gui_backend_signature_count());
