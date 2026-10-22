@@ -32,6 +32,8 @@ set "OUT=%ROOT%\build_msvc"
 set "GUI=%SRC%\gui"
 set "DEP=%ROOT%\dep"
 set "RES=%GUI%\resource"
+set "STORE_BUILD=0"
+if /i "%~1"=="store" set "STORE_BUILD=1"
 
 rem --- Clean targets (no Visual Studio environment needed) -------------------
 if /i "%~1"=="clean"    call :do_clean     & exit /b 0
@@ -138,6 +140,9 @@ if defined CDIS_LIB (
 
 if not exist "%OUT%" mkdir "%OUT%"
 
+set "EXTRA_DEFINES="
+if "%STORE_BUILD%"=="1" set "EXTRA_DEFINES=/DCDIE_STORE_BUILD"
+
 rem --- Engine source list (engine minus entry points and the gui dir) --------
 set "GUI_SOURCES="
 for /r "%SRC%" %%f in (*.c) do (
@@ -165,14 +170,20 @@ rem Matches CMake: /utf-8, /MT, /MANIFEST:NO (the .rc owns the manifest).
 rem No /NODEFAULTLIB, /ENTRY or -DCDIE_NO_CRT: xxwidgets needs the hosted CRT.
 rem XXWIDGETS_STATIC / XXFC_STATIC stop the headers using dllimport (__imp_ symbols)
 rem when linking the static .lib files.
-echo [2/2] cdie_gui.exe (xxwidgets, static CRT)...
+if "%STORE_BUILD%"=="1" (
+    echo Building STORE version
+) else (
+    echo Building NORMAL version
+)
+
+
 if not exist "%OUT%\obj_gui" mkdir "%OUT%\obj_gui"
-cl /nologo /O2 /W3 /MT /utf-8 /DNDEBUG /DXXWIDGETS_STATIC /DXXFC_STATIC ^
+cl /nologo /O1 /GL /Gy /Gw /GS- /W3 /MT /utf-8 /DNDEBUG /DXXWIDGETS_STATIC /DXXFC_STATIC !EXTRA_DEFINES! ^
    -I"%SRC%" -I"%GUI%" -I"%RES%" -I"%XXW_INC%" -I"%XXF_INC%" ^
    !GUI_SOURCES! "%OUT%\cdie_gui.res" /Fe:"%OUT%\cdie_gui.exe" /Fo:"%OUT%\obj_gui\\" ^
-   /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /OPT:REF /OPT:ICF ^
+      /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /OPT:REF /OPT:ICF /LTCG /DEBUG:NONE /MAP:"%OUT%\cdie_gui.map" ^
    "%XXW_LIB%" "%XXF_LIB%" !CDIS_ARG! ^
-   user32.lib gdi32.lib comdlg32.lib comctl32.lib shell32.lib ole32.lib advapi32.lib dwmapi.lib
+      user32.lib gdi32.lib comdlg32.lib comctl32.lib shell32.lib ole32.lib advapi32.lib dwmapi.lib uxtheme.lib msimg32.lib
 if errorlevel 1 ( echo BUILD FAILED ^(cdie_gui.exe^) & exit /b 1 )
 
 echo.
