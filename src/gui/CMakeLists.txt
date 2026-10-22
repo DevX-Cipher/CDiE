@@ -44,6 +44,9 @@ target_include_directories(cdie_gui PRIVATE
 target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets)
 
 if(WIN32)
+  if(CDIE_STORE_BUILD)
+        target_compile_definitions(cdie_gui PRIVATE CDIE_STORE_BUILD)
+    endif()
     target_sources(cdie_gui PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/platform/platform_win32.c
         ${CMAKE_CURRENT_LIST_DIR}/resource/cdie_gui.rc)

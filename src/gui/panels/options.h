@@ -1,0 +1,77 @@
+#ifndef CDIE_OPTIONS_H
+#define CDIE_OPTIONS_H
+
+#include <stddef.h>
+#include <xxwidgets/xxwidgets.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define OPTIONS_FONT_ROLES 4   /* controls, table views, tree views, text edits */
+
+enum {
+  OPTIONS_PAGE_SCAN = 0,
+  OPTIONS_PAGE_DATABASES,
+  OPTIONS_PAGE_OPTIMIZATION,
+  OPTIONS_PAGE_FONTS,
+  OPTIONS_PAGE_CONTEXT
+};
+
+enum {
+  OPTIONS_RESULT_NONE = 0,       /* closed with OK or Cancel */
+  OPTIONS_RESULT_DATABASES,      /* host should open its database paths dialog */
+  OPTIONS_RESULT_FONTS,          /* host should open its fonts dialog */
+  OPTIONS_RESULT_CONTEXT         /* host should open its context menu dialog */
+};
+
+typedef struct OptionsScan {
+  int deep, heuristic, verbose, aggressive, hide_unknown, format;
+  int db_extra, db_custom;
+} OptionsScan;
+
+typedef struct OptionsOptimization {
+  size_t buffer_size;            /* 0 = Default */
+  size_t file_buffer_size;       /* 0 = Default */
+  int use_sse2, use_avx2;
+  int has_sse2, has_avx2;        /* host-reported CPU/OS support */
+} OptionsOptimization;
+
+
+
+typedef struct OptionsFont {
+  char family[128];            /* empty = default family */
+  unsigned int point_size;     /* 0 = default size */
+  int bold, italic;
+} OptionsFont;
+
+typedef struct OptionsHost {
+  void* user;
+  void (*get_scan)(void* user, OptionsScan* out);
+  int  (*set_scan)(void* user, const OptionsScan* in);
+  int  (*get_optimization)(void* user, OptionsOptimization* out);
+  int  (*set_optimization)(void* user, const OptionsOptimization* in);
+
+  int  context_available;      /* 0 hides the Context menu page */
+  int  updates_available;      /* 0 hides the Update page */
+
+  int  (*browse_folder)(void* user, char* out, size_t cap);
+  void (*db_changed)(void* user);
+  int  (*get_fonts)(void* user, OptionsFont out[OPTIONS_FONT_ROLES]);
+  int  (*set_fonts)(void* user, const OptionsFont in[OPTIONS_FONT_ROLES]);
+  int  (*choose_font)(void* user, int role, OptionsFont* font);
+  int  (*context_get)(void* user, int* enabled);
+  int  (*context_set)(void* user, int enabled);
+  const char* (*get_version)(void* user);
+  int  (*check_update)(void* user, char* out, size_t cap);
+  int  (*list_fonts)(void* user, int fixed_only,
+  void (*add)(const char* family, void* ud), void* ud);
+} OptionsHost;
+
+int options_show(xxwidgets_app* app, xxwidgets_widget* owner,
+  const OptionsHost* host, int start_page);
+
+#ifdef __cplusplus
+}
+#endif
+#endif

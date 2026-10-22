@@ -31,65 +31,60 @@
 #include <dwmapi.h>
 #include <uxtheme.h>
 #pragma comment(lib, "uxtheme.lib")
-
 #ifndef TVM_SETLINECOLOR
 #define TVM_SETLINECOLOR (TV_FIRST + 40)
 #endif
 #include <xxwidgets/xxwidgets.h>
 #include <xxwidgets/xxwidgets_scan_panel.h>
 #include <xxwidgets/xxwidgets_combobox.h>
-#include <xxwidgets/xxwidgets_scan_options.h>
 #include <xxwidgets/xxwidgets_font_options.h>
 #include <xxwidgets/xxwidgets_context_options.h>
-#include <xxwidgets/xxwidgets_optimization_options.h>
 #include <limits.h>
 #include <string.h>
 
 #include "core/gui_backend.h"
+#include "core/config.h"
 #include "resource.h"
 #include "theme/theme.h"
 #include "controls/sidebar.h"
 #include "panels/header.h"
 #include "panels/infobar.h"
+#include "panels/options.h"
 #include "controls/tabbar.h"
 #include "controls/bottombar.h"
 #include "controls/treeview.h"
 
-#define CR(c) RGB(((c) >> 16) & 255, ((c) >> 8) & 255, (c) & 255)
-
 #define IDC_EDIT_PATH      102
-#define IDC_BTN_BROWSE     103
 #define IDC_COMBO_TYPE     104
 #define IDC_COMBO_FLAGS    105
 #define IDC_COMBO_DATABASES 106
 #define IDC_STATIC_MSEC    107
 #define IDC_BTN_SCAN       108
 #define IDC_SCANRESULTS    109
-#define IDC_BTN_EXIT       110
-#define IDC_BTN_OPTIONS    111
-#define IDC_BTN_ABOUT      112
 #define IDC_BTN_REPORT     113
 #define IDC_STATUS         114
-#define IDC_BTN_DB_PATHS   115
-#define IDC_BTN_FONTS      116
-#define IDC_BTN_CONTEXT    117
-#define IDC_BTN_OPTIMIZATION 118
+
+ /* Store / VSIX builds get updates from Microsoft */
+#ifdef CDIE_STORE_BUILD
+#define CDIE_SHOW_UPDATES 0
+#define CDIE_SHOW_CONTEXT 0
+#else
+#define CDIE_SHOW_UPDATES 1
+#define CDIE_SHOW_CONTEXT 1
+#endif
 
 enum gui_action {
   ACTION_NONE, ACTION_SCAN, ACTION_BROWSE,
   ACTION_OPTIONS, ACTION_ABOUT, ACTION_REPORT,
-  ACTION_DATABASE_PATHS, ACTION_FONTS, ACTION_CONTEXT, ACTION_OPTIMIZATION,
+  ACTION_DATABASE_PATHS,
   ACTION_SIGNATURES, ACTION_STRINGS
 };
 
-static HINSTANCE g_hInst;
 static xxwidgets_app* g_app;
-static xxwidgets_widget* g_window, * g_fileLabel, * g_path, * g_browse, * g_type;
+static xxwidgets_widget* g_window, * g_path, * g_type;
 static xxwidgets_widget* g_flags, * g_databases, * g_msec, * g_scan, * g_results;
-static xxwidgets_widget* g_typeLabel, * g_flagLabel, * g_databaseLabel, * g_databasePaths;
-static xxwidgets_widget* g_options, * g_aboutButton, * g_reportButton, * g_exit, * g_status;
-static xxwidgets_widget* g_fontsButton, * g_contextButton;
-static xxwidgets_widget* g_optimizationButton;
+static xxwidgets_widget* g_typeLabel, * g_flagLabel, * g_databaseLabel;
+static xxwidgets_widget* g_reportButton, * g_status;
 static xxwidgets_scan_panel* g_panel;
 static xxwidgets_about_dialog* g_about;
 
@@ -97,7 +92,6 @@ static xxwidgets_about_dialog* g_about;
 static Sidebar* g_sidebar;
 static Header* g_header_wnd;
 static Infobar* g_infobar_wnd;
-//static Tabbar* g_tabbar;
 static Bottombar* g_bottombar;
 static ResultsTree* g_tree;
 
@@ -111,6 +105,7 @@ static int g_bFlagDeep = 1, g_bFlagHeur = 1, g_bFlagVerbose = 1;
 static int g_bFlagAggr, g_bFlagHideUnknown, g_bFlagFormat;
 static int g_bDbExtra = 1, g_bDbCustom = 1;
 static void layout(void);
+
 
 static HWND native(xxwidgets_widget* widget)
 {
@@ -572,6 +567,11 @@ static void do_scan(void)
   xxwidgets_status status;
   int ok, type_id = 0;
 
+  if (config_db_required()) {           
+    xxwidgets_widget_set_text(g_status, "Select the signature database folder first.");
+    g_pending = ACTION_DATABASE_PATHS;
+    return;
+  }
   status = xxwidgets_widget_get_text(g_path, NULL, 0, &required);
   if (status != XXWIDGETS_OK) {
     report_ui_error("Read file name", status); return;
@@ -690,124 +690,277 @@ static void do_browse(void)
   }
 }
 
-static int do_options(void)
+static void opt_get_scan(void* u, OptionsScan* o)
 {
-  xxwidgets_scan_options options = { flags_mask(), databases_mask() };
-  int accepted = 0;
-  xxwidgets_status status =
-    xxwidgets_scan_options_dialog(g_window, "cdie Scan options",
-      &options, &accepted);
-  if (status != XXWIDGETS_OK) {
-    report_ui_error("Open Options", status); return -1;
-  }
-  if (accepted) {
-    g_bFlagDeep = (options.flags & XXWIDGETS_SCAN_DEEP) != 0;
-    g_bFlagHeur = (options.flags & XXWIDGETS_SCAN_HEURISTIC) != 0;
-    g_bFlagVerbose = (options.flags & XXWIDGETS_SCAN_VERBOSE) != 0;
-    g_bFlagAggr = (options.flags & XXWIDGETS_SCAN_AGGRESSIVE) != 0;
-    g_bFlagHideUnknown = (options.flags & XXWIDGETS_SCAN_HIDE_UNKNOWN) != 0;
-    g_bFlagFormat = (options.flags & XXWIDGETS_SCAN_FORMAT) != 0;
-    g_bDbExtra = (options.databases & XXWIDGETS_SCAN_DATABASE_EXTRA) != 0;
-    g_bDbCustom = (options.databases & XXWIDGETS_SCAN_DATABASE_CUSTOM) != 0;
-    apply_flags_to_backend();
-    status = sync_panel_options();
-    if (status != XXWIDGETS_OK)
-      report_ui_error("Update scan options", status);
-    else
-      xxwidgets_widget_set_text(g_status,
-        "Options applied to the next scan. "
-        "Use Database paths to choose signature folders.");
-  }
-  return accepted;
+  (void)u;
+  o->deep = g_bFlagDeep; o->heuristic = g_bFlagHeur; o->verbose = g_bFlagVerbose;
+  o->aggressive = g_bFlagAggr; o->hide_unknown = g_bFlagHideUnknown;
+  o->format = g_bFlagFormat;
+  o->db_extra = g_bDbExtra; o->db_custom = g_bDbCustom;
 }
 
-static int do_optimization(void)
+static int opt_set_scan(void* u, const OptionsScan* o)
 {
-  gui_backend_optimization_options     current;
-  gui_backend_optimization_capabilities features;
-  xxwidgets_optimization_options     options;
-  xxwidgets_optimization_capabilities capabilities;
-  xxwidgets_status status;
-  int accepted = 0;
-  if (!gui_backend_get_optimization_options(&current) ||
-    !gui_backend_get_optimization_capabilities(&features)) {
-    report_ui_error("Read optimization options", XXWIDGETS_PLATFORM_ERROR);
-    return -1;
+  (void)u;
+  g_bFlagDeep = o->deep; g_bFlagHeur = o->heuristic; g_bFlagVerbose = o->verbose;
+  g_bFlagAggr = o->aggressive; g_bFlagHideUnknown = o->hide_unknown;
+  g_bFlagFormat = o->format;
+  g_bDbExtra = o->db_extra; g_bDbCustom = o->db_custom;
+  apply_flags_to_backend();
+  return sync_panel_options() == XXWIDGETS_OK;
+}
+
+static int opt_get_opt(void* u, OptionsOptimization* o)
+{
+  gui_backend_optimization_options cur;
+  gui_backend_optimization_capabilities caps;
+  (void)u;
+  if (!gui_backend_get_optimization_options(&cur) ||
+    !gui_backend_get_optimization_capabilities(&caps)) return 0;
+  o->buffer_size = cur.buffer_size;
+  o->file_buffer_size = cur.file_buffer_size;
+  o->use_sse2 = cur.use_sse2; o->use_avx2 = cur.use_avx2;
+  o->has_sse2 = caps.sse2; o->has_avx2 = caps.avx2;
+  return 1;
+}
+
+static int opt_set_opt(void* u, const OptionsOptimization* o)
+{
+  gui_backend_optimization_options cur;
+  (void)u;
+  if (!gui_backend_get_optimization_options(&cur)) return 0;
+  cur.buffer_size = o->buffer_size;
+  cur.file_buffer_size = o->file_buffer_size;
+  cur.use_sse2 = o->use_sse2; cur.use_avx2 = o->use_avx2;
+  return gui_backend_set_optimization_options(&cur) ? 1 : 0;
+}
+
+static int opt_browse_folder(void* u, char* out, size_t cap)
+{
+  BROWSEINFOW picker; LPITEMIDLIST item; WCHAR path[MAX_PATH]; int ok = 0;
+  (void)u;
+  ZeroMemory(&picker, sizeof(picker));
+  picker.hwndOwner = GetActiveWindow();
+  picker.lpszTitle = L"Select the database folder";
+  picker.ulFlags = BIF_RETURNONLYFSDIRS;
+  item = SHBrowseForFolderW(&picker);
+  if (item) {
+    if (SHGetPathFromIDListW(item, path))
+      ok = WideCharToMultiByte(CP_UTF8, 0, path, -1, out, (int)cap, NULL, NULL) > 0;
+    CoTaskMemFree(item);
   }
-  options.buffer_size = current.buffer_size;
-  options.file_buffer_size = current.file_buffer_size;
-  options.use_sse2 = current.use_sse2;
-  options.use_avx2 = current.use_avx2;
-  capabilities.sse2 = features.sse2;
-  capabilities.avx2 = features.avx2;
-  status = xxwidgets_optimization_options_dialog(g_window, "cdie Optimization",
-    &capabilities, &options, &accepted);
-  if (status != XXWIDGETS_OK) {
-    report_ui_error("Open optimization options", status); return -1;
+  return ok;
+}
+
+static void opt_db_changed(void* u)
+{
+  WCHAR text[160];
+  (void)u;
+  clear_scan();
+  wsprintfW(text, L"Database reloaded: %d signatures. Choose a file and press Scan.",
+    gui_backend_signature_count());
+  set_status_wide(text);
+}
+
+typedef struct { WCHAR** names; SIZE_T count, cap; int failed; int fixed_only; } font_list;
+
+static int CALLBACK enum_font_proc(const LOGFONTW* lf, const TEXTMETRICW* tm,
+  DWORD type, LPARAM param)
+{
+  font_list* list = (font_list*)param;
+  (void)tm;
+  if (list->failed) return 0;
+  if (lf->lfFaceName[0] == L'@') return 1;               
+  if (!(type & TRUETYPE_FONTTYPE)) return 1;             
+  if (list->fixed_only && !(lf->lfPitchAndFamily & FIXED_PITCH)) return 1;
+
+  if (list->count == list->cap) {
+    SIZE_T cap = list->cap ? list->cap * 2 : 128;
+    WCHAR** n = list->names
+      ? (WCHAR**)HeapReAlloc(GetProcessHeap(), 0, list->names, cap * sizeof(*n))
+      : (WCHAR**)HeapAlloc(GetProcessHeap(), 0, cap * sizeof(*n));
+    if (!n) { list->failed = 1; return 0; }
+    list->names = n; list->cap = cap;
   }
-  if (accepted) {
-    current.buffer_size = options.buffer_size;
-    current.file_buffer_size = options.file_buffer_size;
-    current.use_sse2 = options.use_sse2;
-    current.use_avx2 = options.use_avx2;
-    if (!gui_backend_set_optimization_options(&current)) {
-      report_ui_error("Apply optimization options", XXWIDGETS_PLATFORM_ERROR);
-      return -1;
+  {
+    SIZE_T len = lstrlenW(lf->lfFaceName) + 1;
+    WCHAR* copy = (WCHAR*)HeapAlloc(GetProcessHeap(), 0, len * sizeof(WCHAR));
+    if (!copy) { list->failed = 1; return 0; }
+    CopyMemory(copy, lf->lfFaceName, len * sizeof(WCHAR));
+    list->names[list->count++] = copy;
+  }
+  return 1;
+}
+
+static int cmp_name(const void* a, const void* b)
+{
+  return lstrcmpiW(*(WCHAR* const*)a, *(WCHAR* const*)b);
+}
+
+static void enumerate_fonts(font_list* list, int fixed_only)
+{
+  LOGFONTW lf = { 0 };
+  HDC dc = GetDC(NULL);
+  lf.lfCharSet = DEFAULT_CHARSET;
+  list->fixed_only = fixed_only;
+  EnumFontFamiliesExW(dc, &lf, enum_font_proc, (LPARAM)list, 0);
+  ReleaseDC(NULL, dc);
+  if (list->count > 1)
+    qsort(list->names, list->count, sizeof(WCHAR*), cmp_name);
+  {
+    SIZE_T i, out = 0;
+    for (i = 0; i < list->count; ++i) {
+      if (out && !lstrcmpiW(list->names[out - 1], list->names[i]))
+        HeapFree(GetProcessHeap(), 0, list->names[i]);
+      else
+        list->names[out++] = list->names[i];
     }
-    xxwidgets_widget_set_text(g_status,
-      "Optimization settings applied to future scans.");
+    list->count = out;
   }
-  return accepted;
 }
 
-static int do_fonts(void)
+static int opt_list_fonts(void* u, int fixed_only,
+  void (*add)(const char* family, void* ud), void* ud)
 {
-  xxwidgets_font_options options;
-  int accepted = 0;
-  xxwidgets_status status = xxwidgets_app_get_font_options(g_app, &options);
-  if (status == XXWIDGETS_OK)
-    status = xxwidgets_font_options_dialog(g_window, "cdie Fonts",
-      &options, &accepted);
-  if (status == XXWIDGETS_OK && accepted)
-    status = xxwidgets_app_set_font_options(g_app, &options);
-  if (status != XXWIDGETS_OK) {
-    report_ui_error("Set interface fonts", status); return -1;
+  font_list list = { 0 };
+  SIZE_T i;
+  (void)u;
+  enumerate_fonts(&list, fixed_only);
+  if (list.failed) {
+    for (i = 0; i < list.count; ++i) HeapFree(GetProcessHeap(), 0, list.names[i]);
+    if (list.names) HeapFree(GetProcessHeap(), 0, list.names);
+    return 0;
   }
-  if (accepted) {
-    layout();
-    xxwidgets_widget_set_text(g_status,
-      "Fonts applied to the interface, results and dialogs.");
+  for (i = 0; i < list.count; ++i) {
+    char* utf8 = wide_to_utf8(list.names[i]);
+    if (utf8) { add(utf8, ud); HeapFree(GetProcessHeap(), 0, utf8); }
+    HeapFree(GetProcessHeap(), 0, list.names[i]);
   }
-  return accepted;
+  if (list.names) HeapFree(GetProcessHeap(), 0, list.names);
+  return 1;
 }
 
-static int do_context(void)
+static int opt_get_fonts(void* u, OptionsFont out[OPTIONS_FONT_ROLES])
+{
+  xxwidgets_font_options fo;
+  int k;
+  (void)u;
+  if (xxwidgets_app_get_font_options(g_app, &fo) != XXWIDGETS_OK) return 0;
+  for (k = 0; k < OPTIONS_FONT_ROLES; ++k) {
+    lstrcpynA(out[k].family, fo.fonts[k].family, sizeof(out[k].family));
+    out[k].point_size = fo.fonts[k].point_size;
+    out[k].bold = fo.fonts[k].bold;
+    out[k].italic = fo.fonts[k].italic;
+  }
+  return 1;
+}
+
+static int opt_set_fonts(void* u, const OptionsFont in[OPTIONS_FONT_ROLES])
+{
+  xxwidgets_font_options fo;
+  int k;
+  (void)u;
+  if (xxwidgets_app_get_font_options(g_app, &fo) != XXWIDGETS_OK) return 0;
+  for (k = 0; k < OPTIONS_FONT_ROLES; ++k) {
+    lstrcpynA(fo.fonts[k].family, in[k].family, sizeof(fo.fonts[k].family));
+    fo.fonts[k].point_size = in[k].point_size;
+    fo.fonts[k].bold = in[k].bold ? 1 : 0;
+    fo.fonts[k].italic = in[k].italic ? 1 : 0;
+  }
+  if (xxwidgets_app_set_font_options(g_app, &fo) != XXWIDGETS_OK) return 0;
+  layout();
+  xxwidgets_widget_set_text(g_status,
+    "Fonts applied to the interface, results and dialogs.");
+  return 1;
+}
+
+static int context_access(int query, int* value)
 {
   WCHAR executable[32768];
   char* path;
-  DWORD length = GetModuleFileNameW(NULL, executable,
-    (DWORD)(sizeof(executable) / sizeof(executable[0])));
   xxwidgets_context_config config = {
-      "cdie", "Scan with cdie", "*", NULL, XXWIDGETS_CONTEXT_CURRENT_USER
+    "cdie", "Scan with cdie", "*", NULL, XXWIDGETS_CONTEXT_CURRENT_USER
   };
   xxwidgets_status status;
-  int accepted = 0;
-  if (!length || length >= sizeof(executable) / sizeof(executable[0])) {
-    report_ui_error("Read program path", XXWIDGETS_PLATFORM_ERROR); return -1;
-  }
+  DWORD length = GetModuleFileNameW(NULL, executable,
+    (DWORD)(sizeof(executable) / sizeof(executable[0])));
+  if (!length || length >= sizeof(executable) / sizeof(executable[0])) return 0;
   path = wide_to_utf8(executable);
-  if (!path) { report_ui_error("Read program path", XXWIDGETS_OUT_OF_MEMORY); return -1; }
+  if (!path) return 0;
   config.executable = path;
-  status = xxwidgets_context_options_dialog(g_window, "cdie Context menu",
-    &config, &accepted);
-  HeapFree(GetProcessHeap(), 0, path);
-  if (status != XXWIDGETS_OK) {
-    report_ui_error("Update Explorer context menu", status); return -1;
+  if (query) {
+    int registered = 0;
+    status = xxwidgets_context_is_registered(&config, &registered);
+    if (status == XXWIDGETS_OK) *value = registered != 0;
   }
-  if (accepted)
+  else {
+    status = xxwidgets_context_set_enabled(&config, *value ? 1 : 0);
+  }
+  HeapFree(GetProcessHeap(), 0, path);
+  return status == XXWIDGETS_OK;
+}
+
+static int opt_context_get(void* u, int* enabled)
+{
+  (void)u;
+  return context_access(1, enabled);
+}
+
+static int opt_context_set(void* u, int enabled)
+{
+  int ok;
+  (void)u;
+  ok = context_access(0, &enabled);
+  if (ok)
     xxwidgets_widget_set_text(g_status,
       "Explorer context menu updated for the current user.");
-  return accepted;
+  return ok;
+}
+
+static const char* opt_get_version(void* u)
+{
+  const char* v = gui_backend_app_title();
+  (void)u;
+  while (*v && *v != ' ') ++v;      /* title is "name version" */
+  if (*v) ++v;
+  return v;
+}
+
+static int opt_check_update(void* u, char* out, size_t cap)
+{
+  HINSTANCE r;
+  (void)u;
+  r = ShellExecuteW(NULL, L"open",
+    L"https://github.com/horsicq/Detect-It-Easy/releases",   /* change to your releases page */
+    NULL, NULL, SW_SHOWNORMAL);
+  if ((INT_PTR)r <= 32) {
+    lstrcpynA(out, "Could not open the browser.", (int)cap);
+    return 0;
+  }
+  lstrcpynA(out, "Opened the releases page in your browser.", (int)cap);
+  return 1;
+}
+
+static void do_options_window(int page)
+{
+  OptionsHost host;
+  ZeroMemory(&host, sizeof(host));
+  host.get_scan = opt_get_scan;
+  host.set_scan = opt_set_scan;
+  host.get_optimization = opt_get_opt;
+  host.set_optimization = opt_set_opt;
+  host.context_available = CDIE_SHOW_CONTEXT;
+  host.updates_available = CDIE_SHOW_UPDATES;
+  host.browse_folder = opt_browse_folder;
+  host.db_changed = opt_db_changed;
+  host.get_fonts = opt_get_fonts;
+  host.set_fonts = opt_set_fonts;
+  host.list_fonts = opt_list_fonts;
+  host.context_get = opt_context_get;
+  host.context_set = opt_context_set;
+  host.get_version = opt_get_version;
+  host.check_update = opt_check_update;
+  options_show(g_app, g_window, &host, page);
 }
 
 static xxwidgets_status configure_about(void)
@@ -867,110 +1020,6 @@ static void do_about(void)
   if (status != XXWIDGETS_OK) report_ui_error("Open About", status);
 }
 
-static void set_dlg_edit_utf8(HWND dialog, int id, const char* text)
-{
-  WCHAR* wide = utf8_to_wide(text);
-  SetDlgItemTextW(dialog, id, wide ? wide : L"");
-  if (wide) HeapFree(GetProcessHeap(), 0, wide);
-}
-
-static char* get_dlg_edit_utf8(HWND dialog, int id)
-{
-  HWND edit = GetDlgItem(dialog, id);
-  int   length = GetWindowTextLengthW(edit);
-  WCHAR* wide = (WCHAR*)HeapAlloc(GetProcessHeap(), 0,
-    (SIZE_T)(length + 1) * sizeof(WCHAR));
-  char* text;
-  if (!wide) return NULL;
-  GetWindowTextW(edit, wide, length + 1);
-  text = wide_to_utf8(wide);
-  HeapFree(GetProcessHeap(), 0, wide);
-  return text;
-}
-
-static void browse_folder_into(HWND dialog, int id)
-{
-  BROWSEINFOW picker;
-  LPITEMIDLIST item;
-  WCHAR path[MAX_PATH];
-  ZeroMemory(&picker, sizeof(picker));
-  picker.hwndOwner = dialog;
-  picker.lpszTitle = L"Select the database folder";
-  picker.ulFlags = BIF_RETURNONLYFSDIRS;
-  item = SHBrowseForFolderW(&picker);
-  if (item) {
-    if (SHGetPathFromIDListW(item, path))
-      SetDlgItemTextW(dialog, id, path);
-    CoTaskMemFree(item);
-  }
-}
-
-static INT_PTR CALLBACK database_dlg_proc(HWND dialog, UINT message,
-  WPARAM wp, LPARAM lp)
-{
-  (void)lp;
-  switch (message) {
-  case WM_INITDIALOG:
-    set_dlg_edit_utf8(dialog, IDC_OPT_MAIN, gui_backend_main_db_path());
-    set_dlg_edit_utf8(dialog, IDC_OPT_EXTRA, gui_backend_extra_db_path());
-    set_dlg_edit_utf8(dialog, IDC_OPT_CUSTOM, gui_backend_custom_db_path());
-    SendDlgItemMessageW(dialog, IDC_OPT_MAIN, EM_SETLIMITTEXT, 32767, 0);
-    SendDlgItemMessageW(dialog, IDC_OPT_EXTRA, EM_SETLIMITTEXT, 32767, 0);
-    SendDlgItemMessageW(dialog, IDC_OPT_CUSTOM, EM_SETLIMITTEXT, 32767, 0);
-    return TRUE;
-  case WM_COMMAND:
-    switch (LOWORD(wp)) {
-    case IDC_OPT_MAIN_BROWSE:
-      browse_folder_into(dialog, IDC_OPT_MAIN);   return TRUE;
-    case IDC_OPT_EXTRA_BROWSE:
-      browse_folder_into(dialog, IDC_OPT_EXTRA);  return TRUE;
-    case IDC_OPT_CUSTOM_BROWSE:
-      browse_folder_into(dialog, IDC_OPT_CUSTOM); return TRUE;
-    case IDOK: {
-      char* main_path = get_dlg_edit_utf8(dialog, IDC_OPT_MAIN);
-      char* extra_path = get_dlg_edit_utf8(dialog, IDC_OPT_EXTRA);
-      char* custom_path = get_dlg_edit_utf8(dialog, IDC_OPT_CUSTOM);
-      int ok = main_path && extra_path && custom_path;
-      if (ok) ok = gui_backend_set_db_paths(main_path, extra_path, custom_path);
-      if (main_path)   HeapFree(GetProcessHeap(), 0, main_path);
-      if (extra_path)  HeapFree(GetProcessHeap(), 0, extra_path);
-      if (custom_path) HeapFree(GetProcessHeap(), 0, custom_path);
-      if (ok) EndDialog(dialog, 1);
-      else {
-        SetDlgItemTextW(dialog, IDC_OPT_ERROR,
-          L"Cannot load the main signature database. "
-          L"Check its folder and try again.");
-        SetFocus(GetDlgItem(dialog, IDC_OPT_MAIN));
-      }
-      return TRUE;
-    }
-    case IDCANCEL: EndDialog(dialog, 0); return TRUE;
-    default: break;
-    }
-    break;
-  case WM_CLOSE: EndDialog(dialog, 0); return TRUE;
-  default: break;
-  }
-  return FALSE;
-}
-
-static void do_database_paths(void)
-{
-  INT_PTR accepted = DialogBoxParamW(g_hInst,
-    MAKEINTRESOURCEW(IDD_OPTIONS), native(g_window), database_dlg_proc, 0);
-  if (accepted == 1) {
-    WCHAR text[160];
-    clear_scan();
-    wsprintfW(text,
-      L"Database reloaded: %d signatures. Choose a file and press Scan.",
-      gui_backend_signature_count());
-    set_status_wide(text);
-  }
-  else if (accepted == -1) {
-    report_ui_error("Open database paths", XXWIDGETS_PLATFORM_ERROR);
-  }
-}
-
 static void layout(void)
 {
   RECT bounds, window_bounds;
@@ -995,10 +1044,6 @@ static void layout(void)
     pl_widget_set_rect(infobar_widget(g_infobar_wnd), cx, cy, cw, INFOBAR_H);
     cy += INFOBAR_H;
   }
-  /*if (g_tabbar) {
-    pl_widget_set_rect(tabbar_widget(g_tabbar), cx, cy, cw, TABBAR_H);
-    cy += TABBAR_H;
-  }*/
   if (g_bottombar)
     pl_widget_set_rect(bottombar_widget(g_bottombar),
       cx, H - BOTTOMBAR_H, cw, BOTTOMBAR_H);
@@ -1013,11 +1058,8 @@ static void layout(void)
   }
 
 #define HIDE(w) if (w) MoveWindow(native(w), -9999, 0, 100, 26, FALSE)
-  HIDE(g_path);  HIDE(g_browse);    HIDE(g_fileLabel); HIDE(g_msec);
-  HIDE(g_status);HIDE(g_options);   HIDE(g_optimizationButton);
-  HIDE(g_fontsButton); HIDE(g_contextButton); HIDE(g_databasePaths);
-  HIDE(g_aboutButton); HIDE(g_reportButton); HIDE(g_exit);
-  HIDE(g_scan);  HIDE(g_type);      HIDE(g_flags);     HIDE(g_databases);
+  HIDE(g_path);  HIDE(g_msec);  HIDE(g_status);  HIDE(g_reportButton);
+  HIDE(g_scan);  HIDE(g_type);  HIDE(g_flags);   HIDE(g_databases);
   HIDE(g_typeLabel); HIDE(g_flagLabel); HIDE(g_databaseLabel);
   HIDE(g_results);
 #undef HIDE
@@ -1075,13 +1117,6 @@ static void on_nav(void* user, int nav_id)
   }
 }
 
-static void on_tab(void* user, int tab_id)
-{
-  (void)user;
-  //if (tab_id == TAB_SCAN && g_tabbar)
-  //  tabbar_set_active(g_tabbar, TAB_SCAN);
-}
-
 static LRESULT CALLBACK window_subclass(HWND handle, UINT message,
   WPARAM wp, LPARAM lp,
   UINT_PTR subclass_id, DWORD_PTR reference)
@@ -1133,9 +1168,7 @@ static void on_event(xxwidgets_app* app, const xxwidgets_event* event,
   void* user_data)
 {
   (void)user_data;
-  if ((event->type == XXWIDGETS_EVENT_CLOSE && event->widget == g_window) ||
-    (event->type == XXWIDGETS_EVENT_CLICK && event->widget == g_exit)) {
-
+  if (event->type == XXWIDGETS_EVENT_CLOSE && event->widget == g_window) {
     g_running = 0;
     xxwidgets_app_quit(app, 0);
   }
@@ -1143,15 +1176,8 @@ static void on_event(xxwidgets_app* app, const xxwidgets_event* event,
     layout();
   }
   else if (event->type == XXWIDGETS_EVENT_CLICK) {
-    if (event->widget == g_scan)           g_pending = ACTION_SCAN;
-    else if (event->widget == g_browse)         g_pending = ACTION_BROWSE;
-    else if (event->widget == g_options)        g_pending = ACTION_OPTIONS;
-    else if (event->widget == g_aboutButton)    g_pending = ACTION_ABOUT;
-    else if (event->widget == g_reportButton)   g_pending = ACTION_REPORT;
-    else if (event->widget == g_databasePaths)  g_pending = ACTION_DATABASE_PATHS;
-    else if (event->widget == g_fontsButton)    g_pending = ACTION_FONTS;
-    else if (event->widget == g_contextButton)  g_pending = ACTION_CONTEXT;
-    else if (event->widget == g_optimizationButton) g_pending = ACTION_OPTIMIZATION;
+    if (event->widget == g_scan)              g_pending = ACTION_SCAN;
+    else if (event->widget == g_reportButton) g_pending = ACTION_REPORT;
   }
   else if (event->type == XXWIDGETS_EVENT_CHANGE &&
     (event->widget == g_flags || event->widget == g_databases)) {
@@ -1209,19 +1235,9 @@ static int create_controls(void)
       { "Ctrl+Shift+D",ACTION_DATABASE_PATHS }
   };
 
-  /* ── Legacy xxwidgets controls (kept for scan engine + smoke test) ── */
-  if (!create_control(&g_fileLabel, XXWIDGETS_LABEL, "File name", 0) ||
-    !create_control(&g_path, XXWIDGETS_EDIT, "", IDC_EDIT_PATH) ||
-    !create_control(&g_browse, XXWIDGETS_BUTTON, "...", IDC_BTN_BROWSE) ||
+  if (!create_control(&g_path, XXWIDGETS_EDIT, "", IDC_EDIT_PATH) ||
     !create_control(&g_msec, XXWIDGETS_LABEL, "", IDC_STATIC_MSEC) ||
-    !create_control(&g_status, XXWIDGETS_LABEL, "", IDC_STATUS) ||
-    !create_control(&g_options, XXWIDGETS_BUTTON, "Scan options", IDC_BTN_OPTIONS) ||
-    !create_control(&g_optimizationButton, XXWIDGETS_BUTTON, "Optimization", IDC_BTN_OPTIMIZATION) ||
-    !create_control(&g_fontsButton, XXWIDGETS_BUTTON, "Fonts", IDC_BTN_FONTS) ||
-    !create_control(&g_contextButton, XXWIDGETS_BUTTON, "Context menu", IDC_BTN_CONTEXT) ||
-    !create_control(&g_aboutButton, XXWIDGETS_BUTTON, "About", IDC_BTN_ABOUT) ||
-    !create_control(&g_databasePaths, XXWIDGETS_BUTTON, "Database paths", IDC_BTN_DB_PATHS) ||
-    !create_control(&g_exit, XXWIDGETS_BUTTON, "Exit", IDC_BTN_EXIT))
+    !create_control(&g_status, XXWIDGETS_LABEL, "", IDC_STATUS))
     return 0;
 
   if (xxwidgets_scan_panel_create(g_window, panel_bounds, &g_panel) != XXWIDGETS_OK)
@@ -1248,7 +1264,7 @@ static int create_controls(void)
   SetWindowLongPtrW(native(g_scan), GWLP_ID, IDC_BTN_SCAN);
   SetWindowLongPtrW(native(g_reportButton), GWLP_ID, IDC_BTN_REPORT);
   SetWindowLongPtrW(native(g_results), GWLP_ID, IDC_SCANRESULTS);
-  
+
   xxwidgets_widget_set_text(g_databaseLabel, "Databases (Main always)");
 
   if (!SetWindowSubclass(native(g_path), path_subclass, 1, 0) ||
@@ -1269,337 +1285,28 @@ static int create_controls(void)
   g_header_wnd = header_create(native(g_window), SIDEBAR_W, 0, 800, HEADER_H,
     on_browse, NULL);
   g_infobar_wnd = infobar_create(native(g_window), SIDEBAR_W, HEADER_H, 800, INFOBAR_H);
-  //g_tabbar = tabbar_create(native(g_window), SIDEBAR_W, HEADER_H + INFOBAR_H, 800, TABBAR_H, on_tab, NULL);
   g_bottombar = bottombar_create(native(g_window), SIDEBAR_W, 500, 800, BOTTOMBAR_H, NULL, NULL);
   g_tree = resultstree_create(native(g_window), SIDEBAR_W, 0, 100, 100);
   SetWindowSubclass(native(g_status), status_subclass, 3, 0);
 
-  if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || /*!g_tabbar ||*/ !g_bottombar || !g_tree) {
+  if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || !g_bottombar || !g_tree) {
     WCHAR msg[200];
     wsprintfW(msg,
       L"Chrome creation failed (1 = ok):\nsidebar=%d header=%d infobar=%d "
-      L"tabbar=%d bottombar=%d\nGetLastError=%lu",
+      L"bottombar=%d tree=%d\nGetLastError=%lu",
       g_sidebar != NULL, g_header_wnd != NULL, g_infobar_wnd != NULL,
-      /*g_tabbar != NULL,*/ g_bottombar != NULL, GetLastError());
+      g_bottombar != NULL, g_tree != NULL, GetLastError());
     MessageBoxW(NULL, msg, L"cdie", MB_ICONERROR);
     return 0;
   }
   return 1;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Smoke test  (unchanged logic; only the specific window geometry has
- * changed so the control lookups still work because the HWNDs exist).
- * ═══════════════════════════════════════════════════════════════════════ */
-static const WCHAR* g_smokeTitle;
-static UINT_PTR g_smokeTimer;
-static int g_smokeAction, g_smokeDone, g_smokeTicks, g_smokeFailed;
-
-static BOOL CALLBACK smoke_children(HWND child, LPARAM data)
-{
-  HWND* controls = (HWND*)data;
-  WCHAR text[64], class_name[32];
-  GetClassNameW(child, class_name, 32);
-  if (lstrcmpW(class_name, L"Button")) return TRUE;
-  GetWindowTextW(child, text, 64);
-  if (!lstrcmpW(text, L"OK"))     controls[1] = child;
-  else if (!lstrcmpW(text, L"Cancel")) controls[2] = child;
-  if ((GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK) == BS_AUTOCHECKBOX
-    && !controls[0]) controls[0] = child;
-  return TRUE;
-}
-
-static BOOL CALLBACK smoke_optimization_children(HWND child, LPARAM data)
-{
-  HWND* controls = (HWND*)data;
-  WCHAR class_name[32], text[32];
-  GetClassNameW(child, class_name, 32);
-  if (!lstrcmpiW(class_name, L"COMBOBOX")) {
-    if (!controls[0]) controls[0] = child;
-    else if (!controls[1]) controls[1] = child;
-  }
-  else if ((GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK)
-    == BS_AUTOCHECKBOX && !lstrcmpiW(class_name, L"BUTTON")) {
-    if (!controls[2]) controls[2] = child;
-    else if (!controls[3]) controls[3] = child;
-  }
-  GetWindowTextW(child, text, 32);
-  if (!lstrcmpW(text, L"OK"))     controls[4] = child;
-  else if (!lstrcmpW(text, L"Cancel")) controls[5] = child;
-  return TRUE;
-}
-
-static int smoke_select_size(HWND window, HWND combo, const WCHAR* label)
-{
-  LRESULT count = SendMessageW(combo, CB_GETCOUNT, 0, 0), i;
-  for (i = 0; i < count; ++i) {
-    WCHAR text[96];
-    LRESULT length = SendMessageW(combo, CB_GETLBTEXTLEN, (WPARAM)i, 0);
-    if (length < 0 || length >= 96) continue;
-    if (SendMessageW(combo, CB_GETLBTEXT, (WPARAM)i, (LPARAM)text) == CB_ERR
-      || lstrcmpW(text, label)) continue;
-    if (SendMessageW(combo, CB_SETCURSEL, (WPARAM)i, 0) == CB_ERR) return 0;
-    SendMessageW(window, WM_COMMAND,
-      MAKEWPARAM(GetDlgCtrlID(combo), CBN_SELCHANGE), (LPARAM)combo);
-    return 1;
-  }
-  return 0;
-}
-
-static BOOL CALLBACK smoke_windows(HWND window, LPARAM data)
-{
-  WCHAR title[128];
-  HWND  controls[3] = { 0 };
-  (void)data;
-  if (GetWindow(window, GW_OWNER) != native(g_window)) return TRUE;
-  GetWindowTextW(window, title, 128);
-  if (lstrcmpW(title, g_smokeTitle)) return TRUE;
-  if (IsWindowEnabled(native(g_window))) return TRUE;
-  if (g_smokeAction == 4 || g_smokeAction == 5) {
-    HWND optimization[6] = { 0 };
-    gui_backend_optimization_capabilities capabilities;
-    gui_backend_optimization_options current;
-    int i;
-    EnumChildWindows(window, smoke_optimization_children, (LPARAM)optimization);
-    for (i = 0; i < 6; ++i) if (!optimization[i]) return TRUE;
-    if (!gui_backend_get_optimization_capabilities(&capabilities) ||
-      !gui_backend_get_optimization_options(&current) ||
-      !!IsWindowEnabled(optimization[2]) != capabilities.sse2 ||
-      !!IsWindowEnabled(optimization[3]) != capabilities.avx2 ||
-      (SendMessageW(optimization[2], BM_GETCHECK, 0, 0) == BST_CHECKED) != current.use_sse2 ||
-      (SendMessageW(optimization[3], BM_GETCHECK, 0, 0) == BST_CHECKED) != current.use_avx2 ||
-      !smoke_select_size(window, optimization[0], L"1 KiB") ||
-      !smoke_select_size(window, optimization[1], L"2 KiB")) {
-      g_smokeFailed = 1;
-      SendMessageW(window, WM_CLOSE, 0, 0);
-    }
-    else {
-      for (i = 2; i < 4; ++i)
-        if (SendMessageW(optimization[i], BM_GETCHECK, 0, 0) == BST_CHECKED)
-          SendMessageW(optimization[i], BM_CLICK, 0, 0);
-      SendMessageW(optimization[g_smokeAction == 5 ? 4 : 5], BM_CLICK, 0, 0);
-    }
-  }
-  else if (g_smokeAction == 3) {
-    HWND cancel = GetDlgItem(window, IDCANCEL);
-    if (!cancel) return TRUE;
-    SetDlgItemTextW(window, IDC_OPT_MAIN, L"Smoke test cancelled database path");
-    SendMessageW(cancel, BM_CLICK, 0, 0);
-  }
-  else if (g_smokeAction) {
-    EnumChildWindows(window, smoke_children, (LPARAM)controls);
-    if (!controls[0] || !controls[1] || !controls[2]) return TRUE;
-    SendMessageW(controls[0], BM_CLICK, 0, 0);
-    SendMessageW(controls[g_smokeAction == 1 ? 1 : 2], BM_CLICK, 0, 0);
-  }
-  else {
-    PostMessageW(window, WM_CLOSE, 0, 0);
-  }
-  g_smokeDone = 1;
-  KillTimer(NULL, g_smokeTimer);
-  g_smokeTimer = 0;
-  return FALSE;
-}
-
-static VOID CALLBACK smoke_tick(HWND window, UINT message, UINT_PTR timer, DWORD time)
-{
-  (void)window; (void)message; (void)timer; (void)time;
-  EnumThreadWindows(GetCurrentThreadId(), smoke_windows, 0);
-  if (!g_smokeDone && ++g_smokeTicks >= 250) {
-    KillTimer(NULL, g_smokeTimer);
-    g_smokeTimer = 0;
-    xxwidgets_app_quit(g_app, 1);
-  }
-}
-
-static int smoke_begin(const WCHAR* title, int action)
-{
-  g_smokeTitle = title; g_smokeAction = action;
-  g_smokeDone = g_smokeTicks = g_smokeFailed = 0;
-  g_smokeTimer = SetTimer(NULL, 0, 20, smoke_tick);
-  return g_smokeTimer != 0;
-}
-
-static int smoke_finish(void)
-{
-  if (g_smokeTimer) KillTimer(NULL, g_smokeTimer);
-  g_smokeTimer = 0;
-  return g_smokeDone && !g_smokeFailed && IsWindowEnabled(native(g_window));
-}
-
-static int smoke_failed(unsigned int line)
-{
-  char text[80];
-  DWORD written;
-  int length = wsprintfA(text, "cdie GUI smoke failed at main_gui.c:%u\r\n", line);
-  WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, (DWORD)length, &written, NULL);
-  return 1;
-}
-
-static int run_smoke(void)
-{
-  xxwidgets_scan_result row = { "Compiler","Microsoft Visual C/C++","19.29","Smoke test" };
-  unsigned int flags, databases;
-  WCHAR class_name[32];
-  SIZE_T report_length = 0;
-  xxwidgets_status status;
-  if (!GetClassNameW(native(g_type), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
-    !GetClassNameW(native(g_flags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
-    !GetClassNameW(native(g_databases), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX"))
-    return smoke_failed(__LINE__);
-  if (xxwidgets_widget_kind(g_results) != XXWIDGETS_TREEVIEW ||
-    xxwidgets_widget_kind(g_type) != XXWIDGETS_COMBOBOX ||
-    xxwidgets_widget_kind(g_flags) != XXWIDGETS_CHECKCOMBOBOX ||
-    xxwidgets_widget_kind(g_databases) != XXWIDGETS_CHECKCOMBOBOX ||
-    xxwidgets_widget_kind(g_scan) != XXWIDGETS_BUTTON ||
-    xxwidgets_widget_kind(g_reportButton) != XXWIDGETS_BUTTON ||
-    xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 7u ||
-    xxwidgets_scan_panel_get_databases(g_panel, &databases) != XXWIDGETS_OK || databases != 3u ||
-    xxwidgets_scan_panel_set_results(g_panel, "Smoke file", &row, 1,
-      "Smoke report\nCompiler: Microsoft Visual C/C++ 19.29") != XXWIDGETS_OK ||
-    xxwidgets_scan_panel_count(g_panel) != 1 ||
-    TreeView_GetCount(native(g_results)) < 2 ||
-    xxwidgets_scan_panel_get_report(g_panel, NULL, 0, &report_length) != XXWIDGETS_OK ||
-    report_length <= 1)
-    return smoke_failed(__LINE__);
-  if (gui_backend_signature_count() > 0) {
-    WCHAR executable[32768];
-    char  status_text[512];
-    size_t i; size_t binary_index = SIZE_MAX;
-    int type_id, binary_type = -1;
-    DWORD length = GetModuleFileNameW(NULL, executable,
-      (DWORD)(sizeof(executable) / sizeof(executable[0])));
-    if (!length || length >= sizeof(executable) / sizeof(executable[0]))
-      return smoke_failed(__LINE__);
-    if (!SetWindowTextW(native(g_path), executable) ||
-      IsWindowEnabled(native(g_type)))
-      return smoke_failed(__LINE__);
-    do_scan();
-    if (xxwidgets_scan_panel_get_report(g_panel, NULL, 0, &report_length) != XXWIDGETS_OK ||
-      report_length <= 1 || !xxwidgets_scan_panel_count(g_panel) ||
-      TreeView_GetCount(native(g_results)) < 2 ||
-      selected_file_type(&type_id) != XXWIDGETS_OK || type_id != 0 ||
-      xxwidgets_combobox_count(g_type) < 3 ||
-      !IsWindowEnabled(native(g_type)))
-      return smoke_failed(__LINE__);
-    for (i = 0; i < xxwidgets_combobox_count(g_type); ++i) {
-      const xx_meta_string* record;
-      if (xxwidgets_combobox_get_record(g_type, i, &record) != XXWIDGETS_OK)
-        return smoke_failed(__LINE__);
-      if (!lstrcmpiW(record->meta_string->data, L"Binary")) {
-        binary_index = i; binary_type = (int)record->var.val.u64; break;
-      }
-    }
-    if (binary_index == SIZE_MAX || binary_type <= 0) return smoke_failed(__LINE__);
-    SendMessageW(native(g_type), CB_SETCURSEL, binary_index, 0);
-    SendMessageW(native(g_window), WM_COMMAND,
-      MAKEWPARAM(IDC_COMBO_TYPE, CBN_SELCHANGE), (LPARAM)native(g_type));
-    if (g_pending != ACTION_SCAN ||
-      selected_file_type(&type_id) != XXWIDGETS_OK || type_id != binary_type)
-      return smoke_failed(__LINE__);
-    g_pending = ACTION_NONE;
-    do_scan();
-    if (g_pending != ACTION_NONE ||
-      selected_file_type(&type_id) != XXWIDGETS_OK || type_id != binary_type ||
-      xxwidgets_widget_get_text(g_status, status_text, sizeof(status_text), NULL) != XXWIDGETS_OK ||
-      !strstr(status_text, "Scan complete (Binary)"))
-      return smoke_failed(__LINE__);
-    SendMessageW(native(g_type), CB_SETCURSEL, 0, 0);
-    SendMessageW(native(g_window), WM_COMMAND,
-      MAKEWPARAM(IDC_COMBO_TYPE, CBN_SELCHANGE), (LPARAM)native(g_type));
-    if (g_pending != ACTION_SCAN) return smoke_failed(__LINE__);
-    g_pending = ACTION_NONE;
-    do_scan();
-    if (g_pending != ACTION_NONE ||
-      selected_file_type(&type_id) != XXWIDGETS_OK || type_id != 0 ||
-      !xxwidgets_scan_panel_count(g_panel))
-      return smoke_failed(__LINE__);
-  }
-  if (!smoke_begin(L"cdie Scan options", 2) || do_options() != 0 ||
-    !smoke_finish() || !g_bFlagDeep)
-    return smoke_failed(__LINE__);
-  if (xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 7u)
-    return smoke_failed(__LINE__);
-  if (!smoke_begin(L"cdie Scan options", 1) || do_options() != 1 ||
-    !smoke_finish() || g_bFlagDeep)
-    return smoke_failed(__LINE__);
-  if (xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 6u ||
-    xxwidgets_scan_panel_get_databases(g_panel, &databases) != XXWIDGETS_OK || databases != 3u)
-    return smoke_failed(__LINE__);
-  {
-    gui_backend_optimization_options before, after;
-    if (!gui_backend_get_optimization_options(&before) ||
-      !smoke_begin(L"cdie Optimization", 4) || do_optimization() != 0 ||
-      !smoke_finish() || !gui_backend_get_optimization_options(&after) ||
-      after.buffer_size != before.buffer_size ||
-      after.file_buffer_size != before.file_buffer_size ||
-      after.use_sse2 != before.use_sse2 || after.use_avx2 != before.use_avx2)
-      return smoke_failed(__LINE__);
-    if (!smoke_begin(L"cdie Optimization", 5) || do_optimization() != 1 ||
-      !smoke_finish() || !gui_backend_get_optimization_options(&after) ||
-      after.buffer_size != 1024 || after.file_buffer_size != 2048 ||
-      after.use_sse2 || after.use_avx2 ||
-      !gui_backend_set_optimization_options(&before))
-      return smoke_failed(__LINE__);
-  }
-  {
-    xxwidgets_font_options before, after;
-    if (xxwidgets_app_get_font_options(g_app, &before) != XXWIDGETS_OK ||
-      !smoke_begin(L"cdie Fonts", 2) || do_fonts() != 0 ||
-      !smoke_finish() ||
-      xxwidgets_app_get_font_options(g_app, &after) != XXWIDGETS_OK ||
-      memcmp(&before, &after, sizeof(before)))
-      return smoke_failed(__LINE__);
-    if (!smoke_begin(L"cdie Fonts", 1) || do_fonts() != 1 ||
-      !smoke_finish() ||
-      xxwidgets_app_get_font_options(g_app, &after) != XXWIDGETS_OK ||
-      !memcmp(&before, &after, sizeof(before)))
-      return smoke_failed(__LINE__);
-    if (xxwidgets_app_set_font_options(g_app, &before) != XXWIDGETS_OK)
-      return smoke_failed(__LINE__);
-    if (!smoke_begin(L"cdie Context menu", 2) || do_context() != 0 ||
-      !smoke_finish())
-      return smoke_failed(__LINE__);
-  }
-  if (!smoke_begin(L"About cdie", 0)) return smoke_failed(__LINE__);
-  status = xxwidgets_about_dialog_show(g_about, g_window);
-  if (status != XXWIDGETS_OK || !smoke_finish()) return smoke_failed(__LINE__);
-  if (!smoke_begin(L"Scan report", 0)) return smoke_failed(__LINE__);
-  status = xxwidgets_scan_panel_show_report(g_panel);
-  if (status != XXWIDGETS_OK || !smoke_finish()) return smoke_failed(__LINE__);
-  {
-    char* original_path = copy_utf8(gui_backend_main_db_path());
-    int   changed;
-    if (!original_path || !smoke_begin(L"Database paths", 3)) {
-      if (original_path) HeapFree(GetProcessHeap(), 0, original_path);
-      return smoke_failed(__LINE__);
-    }
-    do_database_paths();
-    changed = lstrcmpA(original_path, gui_backend_main_db_path());
-    HeapFree(GetProcessHeap(), 0, original_path);
-    if (!smoke_finish() || changed) return smoke_failed(__LINE__);
-  }
-  return xxwidgets_scan_panel_clear(g_panel) != XXWIDGETS_OK ||
-    xxwidgets_scan_panel_count(g_panel) != 0 ||
-    TreeView_GetCount(native(g_results)) != 0;
-}
-
-static int is_smoke_requested(void)
-{
-  int argc = 0, requested = 0, i;
-  WCHAR** arguments = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (!arguments) return 0;
-  for (i = 1; i < argc; ++i)
-    if (!lstrcmpW(arguments[i], L"--smoke-test")) requested = 1;
-  LocalFree(arguments);
-  return requested;
-}
-
 static int set_startup_file(void)
 {
   int argc = 0, has_file = 0;
   WCHAR** arguments = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (arguments && argc > 1 && lstrcmpW(arguments[1], L"--smoke-test")) {
+  if (arguments && argc > 1) {
     char* path = wide_to_utf8(arguments[1]);
     if (path) {
       has_file = xxwidgets_widget_set_text(g_path, path) == XXWIDGETS_OK;
@@ -1610,17 +1317,60 @@ static int set_startup_file(void)
   return has_file;
 }
 
+static int init_backend_with_config(void)
+{
+  CdieConfig cfg;
+  int ok = gui_backend_init();
+  int have_file = config_load(&cfg);
+
+  if (have_file && cfg.main_db[0]) {
+    if (gui_backend_set_db_paths(cfg.main_db, cfg.extra_db, cfg.custom_db))
+      ok = 1;            /* saved folders worked, even if the default failed */
+    return ok;
+  }
+
+  /* Program Files / Store: never use the shipped folder, the user must choose one */
+  if (!config_is_portable()) return 0;
+
+  if (!have_file) {
+    /* Portable first run: create the file with the paths the engine is using now */
+    const char* m = gui_backend_main_db_path();
+    const char* e = gui_backend_extra_db_path();
+    const char* c = gui_backend_custom_db_path();
+    memset(&cfg, 0, sizeof(cfg));
+    snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", m ? m : "");
+    snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", e ? e : "");
+    snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", c ? c : "");
+    config_save(&cfg);
+  }
+  return ok;
+}
+
+static void save_config_on_exit(void)
+{
+  CdieConfig cfg;
+  const char* m;
+  if (config_db_required()) return;
+  m = gui_backend_main_db_path();
+  const char* e = gui_backend_extra_db_path();
+  const char* c = gui_backend_custom_db_path();
+  memset(&cfg, 0, sizeof(cfg));
+  snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", m ? m : "");
+  snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", e ? e : "");
+  snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", c ? c : "");
+  config_save(&cfg);
+}
+
 int gui_run(void)
 {
   xxwidgets_config config = { XXWIDGETS_BACKEND_NATIVE, on_event, NULL };
   xxwidgets_rect   bounds = { 8, 4, 118, 40 };
   xxwidgets_status status;
-  int   result = 0, smoke = is_smoke_requested();
+  int   result = 0, db_ok = 0;
   WCHAR title[160], ready[512];
   WCHAR* base;
   char* utf8_title;
 
-  g_hInst = GetModuleHandleW(NULL);
   status = xxwidgets_app_create(&config, &g_app);
   if (status != XXWIDGETS_OK) {
     MessageBoxW(NULL, L"xxwidgets_app_create failed", L"cdie", MB_ICONERROR);
@@ -1660,7 +1410,8 @@ int gui_run(void)
 
   SetWindowPos(native(g_window), NULL, 0, 0, 1150, 700, SWP_NOMOVE | SWP_NOZORDER);
 
-  if (gui_backend_init()) {
+  db_ok = init_backend_with_config();
+  if (db_ok) {
     wsprintfW(ready, L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan.",
       gui_backend_signature_count());
     set_status_wide(ready);
@@ -1668,16 +1419,15 @@ int gui_run(void)
   else {
     xxwidgets_widget_set_text(g_status,
       "Main signature database not found. "
-      "Use Database paths to select the database folder.");
+      "Select the database folder in the window that opens.");
   }
   apply_flags_to_backend();
   layout();
 
-  if (smoke) { result = run_smoke(); goto finish; }
-
   xxwidgets_widget_set_visible(g_window, 1);
   xxwidgets_widget_focus(g_path);
   if (set_startup_file()) do_scan();
+  if (!db_ok) g_pending = ACTION_DATABASE_PATHS;
 
   g_running = 1;
   while (g_running) {
@@ -1689,12 +1439,9 @@ int gui_run(void)
     switch (action) {
     case ACTION_SCAN:           do_scan();           break;
     case ACTION_BROWSE:         do_browse();         break;
-    case ACTION_OPTIONS:        do_options();        break;
+    case ACTION_OPTIONS:        do_options_window(OPTIONS_PAGE_SCAN); break;
     case ACTION_ABOUT:          do_about();          break;
-    case ACTION_DATABASE_PATHS: do_database_paths(); break;
-    case ACTION_FONTS:          do_fonts();          break;
-    case ACTION_CONTEXT:        do_context();        break;
-    case ACTION_OPTIMIZATION:   do_optimization();   break;
+    case ACTION_DATABASE_PATHS: do_options_window(OPTIONS_PAGE_DATABASES); break;
     case ACTION_SIGNATURES:     signatures_show(g_app, g_window); break;
     case ACTION_STRINGS:
       if (g_lastPath) strings_show(g_app, g_window, g_lastPath);
@@ -1710,7 +1457,7 @@ int gui_run(void)
   }
 
 finish:
-  if (g_smokeTimer) KillTimer(NULL, g_smokeTimer);
+  save_config_on_exit();
   gui_backend_shutdown();
   if (g_about && xxwidgets_about_dialog_destroy(g_about) != XXWIDGETS_OK) result = 1;
   g_about = NULL;
