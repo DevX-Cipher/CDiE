@@ -246,6 +246,25 @@ int config_db_required(void)
   return !config_load(&cfg) || !cfg.main_db[0];
 }
 
+static int int_key(const char* line, const char* key, int* out)
+{
+  size_t n = strlen(key);
+  if (strncmp(line, key, n) != 0 || line[n] != '=') return 0;
+  *out = atoi(line + n + 1);
+  return 1;
+}
+
+static void parse_font(CdieConfig* cfg, const char* line)
+{
+  int k = line[4] - '0';
+  const char* p = line + 6;                       /* after "fontN_" */
+  if (!strncmp(p, "family=", 7))
+    copy_field(cfg->font_family[k], sizeof(cfg->font_family[k]), p + 7);
+  else if (!strncmp(p, "size=", 5))   cfg->font_size[k] = (unsigned)atoi(p + 5);
+  else if (!strncmp(p, "bold=", 5))   cfg->font_bold[k] = atoi(p + 5);
+  else if (!strncmp(p, "italic=", 7)) cfg->font_italic[k] = atoi(p + 7);
+}
+
 int config_load(CdieConfig* cfg)
 {
   const char* path = config_file_path();
@@ -261,6 +280,22 @@ int config_load(CdieConfig* cfg)
     else if (!strncmp(line, "extra=", 6))  copy_field(cfg->extra_db, sizeof(cfg->extra_db), line + 6);
     else if (!strncmp(line, "custom=", 7)) copy_field(cfg->custom_db, sizeof(cfg->custom_db), line + 7);
     else if (!strncmp(line, "db_version=", 11)) copy_field(cfg->db_version, sizeof(cfg->db_version), line + 11);
+    else if (int_key(line, "prefs", &cfg->has_prefs)) {}
+    else if (int_key(line, "deep", &cfg->deep)) {}
+    else if (int_key(line, "heuristic", &cfg->heuristic)) {}
+    else if (int_key(line, "verbose", &cfg->verbose)) {}
+    else if (int_key(line, "aggressive", &cfg->aggressive)) {}
+    else if (int_key(line, "hide_unknown", &cfg->hide_unknown)) {}
+    else if (int_key(line, "format", &cfg->format)) {}
+    else if (int_key(line, "db_extra", &cfg->db_extra)) {}
+    else if (int_key(line, "db_custom", &cfg->db_custom)) {}
+    else if (int_key(line, "sse2", &cfg->use_sse2)) {}
+    else if (int_key(line, "avx2", &cfg->use_avx2)) {}
+    else if (!strncmp(line, "buffer=", 7))      cfg->buffer_size = strtoull(line + 7, NULL, 10);
+    else if (!strncmp(line, "file_buffer=", 12)) cfg->file_buffer_size = strtoull(line + 12, NULL, 10);
+    else if (!strncmp(line, "font", 4) && line[4] >= '0' && line[4] < '0' + CDIE_FONT_ROLES && line[5] == '_')
+      parse_font(cfg, line);
+
   }
   fclose(f);
   return 1;
@@ -288,6 +323,21 @@ int config_save(const CdieConfig* cfg)
   fprintf(f, "extra=%s\n", cfg->extra_db);
   fprintf(f, "custom=%s\n", cfg->custom_db);
   fprintf(f, "db_version=%s\n", ver);
+  if (cfg->has_prefs) {
+    int k;
+    fprintf(f, "prefs=1\n");
+    fprintf(f, "deep=%d\nheuristic=%d\nverbose=%d\naggressive=%d\nhide_unknown=%d\nformat=%d\n",
+      cfg->deep, cfg->heuristic, cfg->verbose, cfg->aggressive, cfg->hide_unknown, cfg->format);
+    fprintf(f, "db_extra=%d\ndb_custom=%d\n", cfg->db_extra, cfg->db_custom);
+    fprintf(f, "sse2=%d\navx2=%d\n", cfg->use_sse2, cfg->use_avx2);
+    fprintf(f, "buffer=%llu\nfile_buffer=%llu\n", cfg->buffer_size, cfg->file_buffer_size);
+    for (k = 0; k < CDIE_FONT_ROLES; ++k) {
+      fprintf(f, "font%d_family=%s\n", k, cfg->font_family[k]);
+      fprintf(f, "font%d_size=%u\n", k, cfg->font_size[k]);
+      fprintf(f, "font%d_bold=%d\n", k, cfg->font_bold[k]);
+      fprintf(f, "font%d_italic=%d\n", k, cfg->font_italic[k]);
+    }
+  }
   return fclose(f) == 0;
 }
 
