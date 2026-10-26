@@ -12,7 +12,7 @@ typedef struct {
   char db_version[32];
 
   int  has_prefs;
-  int  deep, heuristic, verbose, aggressive, hide_unknown, format;
+  int  deep, heuristic, verbose, aggressive, hide_unknown, format, min_to_tray;
   int  db_extra, db_custom;
   int  use_sse2, use_avx2;
   unsigned long long buffer_size, file_buffer_size;

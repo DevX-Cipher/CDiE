@@ -53,6 +53,7 @@
 #include "controls/tabbar.h"
 #include "controls/bottombar.h"
 #include "controls/treeview.h"
+#include "core/tray_win32.h"
 
 #define IDC_EDIT_PATH      102
 #define IDC_COMBO_TYPE     104
@@ -106,6 +107,14 @@ static int g_bFlagAggr, g_bFlagHideUnknown, g_bFlagFormat;
 static int g_bDbExtra = 1, g_bDbCustom = 1;
 static void layout(void);
 
+
+
+static void on_tray_exit(void* user)
+{
+  (void)user;
+  g_running = 0;
+  xxwidgets_app_quit(g_app, 0);
+}
 
 static HWND native(xxwidgets_widget* widget)
 {
@@ -693,6 +702,7 @@ static void opt_get_scan(void* u, OptionsScan* o)
   o->aggressive = g_bFlagAggr; o->hide_unknown = g_bFlagHideUnknown;
   o->format = g_bFlagFormat;
   o->db_extra = g_bDbExtra; o->db_custom = g_bDbCustom;
+  o->min_to_tray = tray_get_enabled();
 }
 
 static int opt_set_scan(void* u, const OptionsScan* o)
@@ -702,6 +712,7 @@ static int opt_set_scan(void* u, const OptionsScan* o)
   g_bFlagAggr = o->aggressive; g_bFlagHideUnknown = o->hide_unknown;
   g_bFlagFormat = o->format;
   g_bDbExtra = o->db_extra; g_bDbCustom = o->db_custom;
+  tray_set_enabled(o->min_to_tray);
   apply_flags_to_backend();
   return sync_panel_options() == XXWIDGETS_OK;
 }
@@ -1117,7 +1128,10 @@ static LRESULT CALLBACK window_subclass(HWND handle, UINT message,
   WPARAM wp, LPARAM lp,
   UINT_PTR subclass_id, DWORD_PTR reference)
 {
+  LRESULT tray_result;
   (void)subclass_id; (void)reference;
+  if (tray_handle_message(handle, message, wp, lp, &tray_result))
+    return tray_result;
   switch (message) {
   case WM_GETMINMAXINFO: {
     MINMAXINFO* info = (MINMAXINFO*)lp;
@@ -1308,6 +1322,39 @@ static int set_startup_file(void)
   return has_file;
 }
 
+static int g_prefsReady;   /* set once saved prefs have been applied at startup */
+
+/* Copy the live settings into cfg so the whole file gets written */
+static void fill_prefs(CdieConfig* cfg)
+{
+  OptionsOptimization opt;
+  OptionsFont fonts[OPTIONS_FONT_ROLES];
+  int k;
+
+  cfg->has_prefs = 1;
+  cfg->deep = g_bFlagDeep;           cfg->heuristic = g_bFlagHeur;
+  cfg->verbose = g_bFlagVerbose;     cfg->aggressive = g_bFlagAggr;
+  cfg->hide_unknown = g_bFlagHideUnknown; cfg->format = g_bFlagFormat;
+  cfg->db_extra = g_bDbExtra;        cfg->db_custom = g_bDbCustom;
+  cfg->min_to_tray = tray_get_enabled();
+
+  if (opt_get_opt(NULL, &opt)) {
+    cfg->use_sse2 = opt.use_sse2;
+    cfg->use_avx2 = opt.use_avx2;
+    cfg->buffer_size = (unsigned long long)opt.buffer_size;
+    cfg->file_buffer_size = (unsigned long long)opt.file_buffer_size;
+  }
+
+  if (opt_get_fonts(NULL, fonts)) {
+    for (k = 0; k < OPTIONS_FONT_ROLES && k < CDIE_FONT_ROLES; ++k) {
+      snprintf(cfg->font_family[k], sizeof(cfg->font_family[k]), "%s", fonts[k].family);
+      cfg->font_size[k] = fonts[k].point_size;
+      cfg->font_bold[k] = fonts[k].bold;
+      cfg->font_italic[k] = fonts[k].italic;
+    }
+  }
+}
+
 static int init_backend_with_config(void)
 {
   CdieConfig cfg;
@@ -1332,6 +1379,7 @@ static int init_backend_with_config(void)
     snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", m ? m : "");
     snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", e ? e : "");
     snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", c ? c : "");
+    fill_prefs(&cfg);
     config_save(&cfg);
   }
   return ok;
@@ -1351,6 +1399,7 @@ static void save_config_on_exit(void)
   snprintf(cfg.main_db, sizeof(cfg.main_db), "%s", m ? m : "");
   snprintf(cfg.extra_db, sizeof(cfg.extra_db), "%s", e ? e : "");
   snprintf(cfg.custom_db, sizeof(cfg.custom_db), "%s", c ? c : "");
+  if (g_prefsReady) fill_prefs(&cfg);
   config_save(&cfg);
 }
 
@@ -1367,6 +1416,7 @@ static void apply_saved_prefs(void)
   g_bFlagVerbose = cfg.verbose;     g_bFlagAggr = cfg.aggressive;
   g_bFlagHideUnknown = cfg.hide_unknown; g_bFlagFormat = cfg.format;
   g_bDbExtra = cfg.db_extra;        g_bDbCustom = cfg.db_custom;
+  tray_set_enabled(cfg.min_to_tray);
   apply_flags_to_backend();
   sync_panel_options();
 
@@ -1436,10 +1486,11 @@ int gui_run(void)
     result = 1; goto finish;
   }
 
+  tray_init(on_tray_exit, NULL);
   SetWindowPos(native(g_window), NULL, 0, 0, 1150, 700, SWP_NOMOVE | SWP_NOZORDER);
-
   db_ok = init_backend_with_config();
   apply_saved_prefs();          /* before the status text, since set_fonts writes one */
+  g_prefsReady = 1;
   if (db_ok) {
     wsprintfW(ready, L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan.",
       gui_backend_signature_count());
@@ -1486,6 +1537,7 @@ int gui_run(void)
   }
 
 finish:
+  tray_remove();
   save_config_on_exit();
   gui_backend_shutdown();
   if (g_about && xxwidgets_about_dialog_destroy(g_about) != XXWIDGETS_OK) result = 1;

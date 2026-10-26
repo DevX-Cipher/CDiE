@@ -14,7 +14,10 @@
 #define NAV_H   38
 #define ROW_H   34
 #define MAXIT   40
-#define NCH     22          
+#define NCH     22  
+
+#define DD_ROW 26
+#define DD_MAXVIS 8
 
 enum { PG_SCAN, PG_DB, PG_OPT, PG_FONTS, PG_CTX, PG_UPDATE, PG_COUNT };
 
@@ -22,7 +25,7 @@ enum { IK_HEAD, IK_TEXT, IK_NOTE, IK_CHECK, IK_BTN, IK_ACCENT, IK_VALUE, IK_PATH
 
 enum {
   ID_NONE,
-  ID_DEEP, ID_HEUR, ID_AGGR, ID_VERBOSE, ID_HIDE, ID_FORMAT,
+  ID_DEEP, ID_HEUR, ID_AGGR, ID_VERBOSE, ID_HIDE, ID_FORMAT, ID_TRAY,
   ID_DBX, ID_DBC,
   ID_SSE2, ID_AVX2,
   ID_BUF_DEC, ID_BUF_INC, ID_FBUF_DEC, ID_FBUF_INC, ID_BUF_VAL, ID_FBUF_VAL,
@@ -152,6 +155,7 @@ static int* chk_ptr(Opt* o, int id)
   case ID_VERBOSE: return &o->scan.verbose;
   case ID_HIDE:    return &o->scan.hide_unknown;
   case ID_FORMAT:  return &o->scan.format;
+  case ID_TRAY:    return &o->scan.min_to_tray;
   case ID_DBX:     return &o->scan.db_extra;
   case ID_DBC:     return &o->scan.db_custom;
   case ID_SSE2:    return &o->opt.use_sse2;
@@ -178,6 +182,7 @@ static int apply_all(Opt* o)
     cfg.verbose = o->scan.verbose;     cfg.aggressive = o->scan.aggressive;
     cfg.hide_unknown = o->scan.hide_unknown; cfg.format = o->scan.format;
     cfg.db_extra = o->scan.db_extra;   cfg.db_custom = o->scan.db_custom;
+    cfg.min_to_tray = o->scan.min_to_tray;
     if (o->have_opt) {
       cfg.use_sse2 = o->opt.use_sse2;  cfg.use_avx2 = o->opt.use_avx2;
       cfg.buffer_size = (unsigned long long)o->opt.buffer_size;
@@ -282,7 +287,9 @@ static void build_items(Opt* o)
     add(o, IK_HEAD, 0, "RESULTS", 1, x, y, x + w, y + 20); y += 28;
     add(o, IK_CHECK, ID_VERBOSE, "Verbose output", 1, x, y, x + w, y + ROW_H); y += ROW_H;
     add(o, IK_CHECK, ID_HIDE, "Hide unknown", 1, x, y, x + w, y + ROW_H); y += ROW_H;
-    add(o, IK_CHECK, ID_FORMAT, "Format result", 1, x, y, x + w, y + ROW_H);
+    add(o, IK_CHECK, ID_FORMAT, "Format result", 1, x, y, x + w, y + ROW_H); y += ROW_H + 14;
+    add(o, IK_HEAD, 0, "WINDOW", 1, x, y, x + w, y + 20); y += 28;
+    add(o, IK_CHECK, ID_TRAY, "Minimize to system tray", 1, x, y, x + w, y + ROW_H);
     break;
 
   case PG_DB:
@@ -475,9 +482,6 @@ static void paint_item(Opt* o, PlCanvas* c, int i)
   default: break;
   }
 }
-
-#define DD_ROW 26
-#define DD_MAXVIS 8
 
 static void font_add(const char* family, void* ud)
 {
@@ -852,7 +856,6 @@ static void on_win_close(void* u)
   pl_window_close(o->win);
 }
 
-
 int options_show(xxwidgets_app* app, xxwidgets_widget* owner,
   const OptionsHost* host, int start_page)
 {
@@ -867,7 +870,7 @@ int options_show(xxwidgets_app* app, xxwidgets_widget* owner,
   if (!o) return OPTIONS_RESULT_NONE;
 
   o->host = *host;
-  o->W = 760; o->H = 520; o->hov = -1; o->navhov = -1;
+  o->W = 760; o->H = 540; o->hov = -1; o->navhov = -1;
   o->dbfocus = -1;
   {
     const char* ver = o->host.get_version ? o->host.get_version(o->host.user) : NULL;
@@ -910,7 +913,7 @@ int options_show(xxwidgets_app* app, xxwidgets_widget* owner,
   o->fontb = pl_font_create(10, 1);
   if (!o->font || !o->fontb) { on_destroy(o); return OPTIONS_RESULT_NONE; }
 
-  win = pl_window_create(ow, "Options", 760, 520, 640, 440, on_win_size, on_win_close, o);
+  win = pl_window_create(ow, "Options", 760, 540, 640, 500, on_win_size, on_win_close, o);
   if (!win) { on_destroy(o); return OPTIONS_RESULT_NONE; }
   o->win = win;
   o->w = pl_widget_create(pl_window_client(win), &s_ops, o, 0, 0, 760, 520);

@@ -23,6 +23,7 @@ add_executable(cdie_gui WIN32
 if(WIN32)
     target_sources(cdie_gui PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/main_gui.c
+		${CMAKE_CURRENT_LIST_DIR}/core/tray_win32.c
         ${CMAKE_CURRENT_LIST_DIR}/panels/header.c
         ${CMAKE_CURRENT_LIST_DIR}/panels/infobar.c)
 else()

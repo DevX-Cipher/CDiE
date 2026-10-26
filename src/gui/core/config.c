@@ -254,15 +254,36 @@ static int int_key(const char* line, const char* key, int* out)
   return 1;
 }
 
-static void parse_font(CdieConfig* cfg, const char* line)
+/* Order matches OPTIONS_FONT_ROLES: Controls, Table views, Tree views, Text edits */
+static const char* s_font_role[CDIE_FONT_ROLES] = { "controls", "tables", "trees", "edits" };
+
+static void apply_font_field(CdieConfig* cfg, int k, const char* p)
 {
-  int k = line[4] - '0';
-  const char* p = line + 6;                       /* after "fontN_" */
   if (!strncmp(p, "family=", 7))
     copy_field(cfg->font_family[k], sizeof(cfg->font_family[k]), p + 7);
   else if (!strncmp(p, "size=", 5))   cfg->font_size[k] = (unsigned)atoi(p + 5);
   else if (!strncmp(p, "bold=", 5))   cfg->font_bold[k] = atoi(p + 5);
   else if (!strncmp(p, "italic=", 7)) cfg->font_italic[k] = atoi(p + 7);
+}
+
+/* Returns 1 if the line was a font key */
+static int parse_font(CdieConfig* cfg, const char* line)
+{
+  int k;
+  for (k = 0; k < CDIE_FONT_ROLES; ++k) {
+    size_t n = strlen(s_font_role[k]);
+    if (!strncmp(line, s_font_role[k], n) && line[n] == '_') {
+      apply_font_field(cfg, k, line + n + 1);
+      return 1;
+    }
+  }
+  /* legacy format: fontN_family= etc. */
+  if (!strncmp(line, "font", 4) && line[4] >= '0' &&
+    line[4] < '0' + CDIE_FONT_ROLES && line[5] == '_') {
+    apply_font_field(cfg, line[4] - '0', line + 6);
+    return 1;
+  }
+  return 0;
 }
 
 int config_load(CdieConfig* cfg)
@@ -275,7 +296,7 @@ int config_load(CdieConfig* cfg)
   if (!path || !(f = open_utf8(path, "r"))) return 0;
 
   while (fgets(line, sizeof(line), f)) {
-    if (line[0] == '#' || line[0] == ';') continue;
+    if (line[0] == '#' || line[0] == ';' || line[0] == '[') continue;
     if (!strncmp(line, "main=", 5))        copy_field(cfg->main_db, sizeof(cfg->main_db), line + 5);
     else if (!strncmp(line, "extra=", 6))  copy_field(cfg->extra_db, sizeof(cfg->extra_db), line + 6);
     else if (!strncmp(line, "custom=", 7)) copy_field(cfg->custom_db, sizeof(cfg->custom_db), line + 7);
@@ -287,15 +308,14 @@ int config_load(CdieConfig* cfg)
     else if (int_key(line, "aggressive", &cfg->aggressive)) {}
     else if (int_key(line, "hide_unknown", &cfg->hide_unknown)) {}
     else if (int_key(line, "format", &cfg->format)) {}
+    else if (int_key(line, "min_to_tray", &cfg->min_to_tray)) {}
     else if (int_key(line, "db_extra", &cfg->db_extra)) {}
     else if (int_key(line, "db_custom", &cfg->db_custom)) {}
     else if (int_key(line, "sse2", &cfg->use_sse2)) {}
     else if (int_key(line, "avx2", &cfg->use_avx2)) {}
     else if (!strncmp(line, "buffer=", 7))      cfg->buffer_size = strtoull(line + 7, NULL, 10);
     else if (!strncmp(line, "file_buffer=", 12)) cfg->file_buffer_size = strtoull(line + 12, NULL, 10);
-    else if (!strncmp(line, "font", 4) && line[4] >= '0' && line[4] < '0' + CDIE_FONT_ROLES && line[5] == '_')
-      parse_font(cfg, line);
-
+    else if (parse_font(cfg, line)) {}
   }
   fclose(f);
   return 1;
@@ -318,24 +338,37 @@ int config_save(const CdieConfig* cfg)
   make_parent_dirs(path);
   f = open_utf8(path, "w");
   if (!f) return 0;
-  fprintf(f, "# cdie settings\n");
+  fprintf(f, "# cdie settings (1 = on, 0 = off)\n\n");
+  fprintf(f, "[databases]\n");
   fprintf(f, "main=%s\n", cfg->main_db);
   fprintf(f, "extra=%s\n", cfg->extra_db);
   fprintf(f, "custom=%s\n", cfg->custom_db);
   fprintf(f, "db_version=%s\n", ver);
   if (cfg->has_prefs) {
     int k;
+    fprintf(f, "\n[scan]\n");
     fprintf(f, "prefs=1\n");
-    fprintf(f, "deep=%d\nheuristic=%d\nverbose=%d\naggressive=%d\nhide_unknown=%d\nformat=%d\n",
-      cfg->deep, cfg->heuristic, cfg->verbose, cfg->aggressive, cfg->hide_unknown, cfg->format);
+    fprintf(f, "deep=%d\nheuristic=%d\naggressive=%d\n",
+      cfg->deep, cfg->heuristic, cfg->aggressive);
+    fprintf(f, "verbose=%d\nhide_unknown=%d\nformat=%d\n",
+      cfg->verbose, cfg->hide_unknown, cfg->format);
     fprintf(f, "db_extra=%d\ndb_custom=%d\n", cfg->db_extra, cfg->db_custom);
+
+    fprintf(f, "\n[window]\n");
+    fprintf(f, "min_to_tray=%d\n", cfg->min_to_tray);
+
+    fprintf(f, "\n[optimization]\n");
     fprintf(f, "sse2=%d\navx2=%d\n", cfg->use_sse2, cfg->use_avx2);
+    fprintf(f, "# buffer sizes in bytes (0 = default)\n");
     fprintf(f, "buffer=%llu\nfile_buffer=%llu\n", cfg->buffer_size, cfg->file_buffer_size);
+
+    fprintf(f, "\n[fonts]\n");
+    fprintf(f, "# empty family and size 0 = system default\n");
     for (k = 0; k < CDIE_FONT_ROLES; ++k) {
-      fprintf(f, "font%d_family=%s\n", k, cfg->font_family[k]);
-      fprintf(f, "font%d_size=%u\n", k, cfg->font_size[k]);
-      fprintf(f, "font%d_bold=%d\n", k, cfg->font_bold[k]);
-      fprintf(f, "font%d_italic=%d\n", k, cfg->font_italic[k]);
+      fprintf(f, "%s_family=%s\n", s_font_role[k], cfg->font_family[k]);
+      fprintf(f, "%s_size=%u\n", s_font_role[k], cfg->font_size[k]);
+      fprintf(f, "%s_bold=%d\n", s_font_role[k], cfg->font_bold[k]);
+      fprintf(f, "%s_italic=%d\n", s_font_role[k], cfg->font_italic[k]);
     }
   }
   return fclose(f) == 0;
