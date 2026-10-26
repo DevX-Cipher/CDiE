@@ -12,9 +12,6 @@
 #include "core/config.h"
 #include "core/tray_win32.h"
 
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "ole32.lib")
-
 #define IDT_DLSTABLE 0xD101
 #define DL_MAX       8
 

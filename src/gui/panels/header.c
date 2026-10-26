@@ -150,7 +150,7 @@ void header_set_path(Header* d, const char* folder, const char* filename)
   copy_str(d->folder, sizeof d->folder, folder);
   copy_str(d->filename, sizeof d->filename, filename);
   d->has_file = (filename && filename[0]) ? 1 : 0;
-  d->timestr[0] = 0;                 /* new file: drop the old time */
+  d->timestr[0] = 0;                 
   pl_invalidate(d->w, NULL);
 }
 

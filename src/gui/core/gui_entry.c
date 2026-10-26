@@ -19,21 +19,21 @@
  * SOFTWARE.
  */
 
-/* gui_entry.c - startup for the GUI, the WINDOWS-subsystem analogue of
- * core/utils_entry.c.
- *
- * With CDIE_NO_CRT the executable has no C runtime: the linker entry point is
- * x_gui_entry_point below, which just runs the window loop and calls
- * ExitProcess. The only non-USER/GDI import left is KERNEL32.
- *
- * The engine object files that make up the GUI (they exclude core/utils_entry.c)
- * still cause the compiler to emit memset/memcpy/memmove and reference _fltused,
- * so those four symbols are supplied here - the same routines utils_entry.c
- * gives the console.
- *
- * Without CDIE_NO_CRT a normal WinMain forwards to the same gui_run(), so the
- * source builds against a hosted runtime too (the path used on 32-bit, where
- * the CRT is needed for the compiler's 64-bit arithmetic helpers). */
+ /* gui_entry.c - startup for the GUI, the WINDOWS-subsystem analogue of
+	* core/utils_entry.c.
+	*
+	* With CDIE_NO_CRT the executable has no C runtime: the linker entry point is
+	* x_gui_entry_point below, which just runs the window loop and calls
+	* ExitProcess. The only non-USER/GDI import left is KERNEL32.
+	*
+	* The engine object files that make up the GUI (they exclude core/utils_entry.c)
+	* still cause the compiler to emit memset/memcpy/memmove and reference _fltused,
+	* so those four symbols are supplied here - the same routines utils_entry.c
+	* gives the console.
+	*
+	* Without CDIE_NO_CRT a normal WinMain forwards to the same gui_run(), so the
+	* source builds against a hosted runtime too (the path used on 32-bit, where
+	* the CRT is needed for the compiler's 64-bit arithmetic helpers). */
 
 int gui_run(void);
 
@@ -60,55 +60,55 @@ int _fltused = 0x9875;
 #pragma optimize("", off)
 #endif
 
-void *memset(void *pDestination, int nValue, size_t nSize)
+void* memset(void* pDestination, int nValue, size_t nSize)
 {
-    unsigned char *pDst = (unsigned char *)pDestination;
-    unsigned char nByte = (unsigned char)nValue;
+	unsigned char* pDst = (unsigned char*)pDestination;
+	unsigned char nByte = (unsigned char)nValue;
 
-    while (nSize--) {
-        *pDst++ = nByte;
-    }
+	while (nSize--) {
+		*pDst++ = nByte;
+	}
 
-    return pDestination;
+	return pDestination;
 }
 
-void *memcpy(void *pDestination, const void *pSource, size_t nSize)
+void* memcpy(void* pDestination, const void* pSource, size_t nSize)
 {
-    unsigned char *pDst = (unsigned char *)pDestination;
-    const unsigned char *pSrc = (const unsigned char *)pSource;
+	unsigned char* pDst = (unsigned char*)pDestination;
+	const unsigned char* pSrc = (const unsigned char*)pSource;
 
-    while (nSize--) {
-        *pDst++ = *pSrc++;
-    }
+	while (nSize--) {
+		*pDst++ = *pSrc++;
+	}
 
-    return pDestination;
+	return pDestination;
 }
 
-void *memmove(void *pDestination, const void *pSource, size_t nSize)
+void* memmove(void* pDestination, const void* pSource, size_t nSize)
 {
-    unsigned char *pDst = (unsigned char *)pDestination;
-    const unsigned char *pSrc = (const unsigned char *)pSource;
+	unsigned char* pDst = (unsigned char*)pDestination;
+	const unsigned char* pSrc = (const unsigned char*)pSource;
 
-    if (pDst == pSrc) {
-        return pDestination;
-    }
+	if (pDst == pSrc) {
+		return pDestination;
+	}
 
-    if ((pDst < pSrc) || (pDst >= pSrc + nSize)) {
-        while (nSize--) {
-            *pDst++ = *pSrc++;
-        }
+	if ((pDst < pSrc) || (pDst >= pSrc + nSize)) {
+		while (nSize--) {
+			*pDst++ = *pSrc++;
+		}
 
-        return pDestination;
-    }
+		return pDestination;
+	}
 
-    pDst += nSize;
-    pSrc += nSize;
+	pDst += nSize;
+	pSrc += nSize;
 
-    while (nSize--) {
-        *--pDst = *--pSrc;
-    }
+	while (nSize--) {
+		*--pDst = *--pSrc;
+	}
 
-    return pDestination;
+	return pDestination;
 }
 
 #if defined(_MSC_VER)
@@ -121,9 +121,9 @@ void *memmove(void *pDestination, const void *pSource, size_t nSize)
 
 static void gui_startup(void)
 {
-    int nResult = gui_run();
+	int nResult = gui_run();
 
-    ExitProcess((UINT)nResult);
+	ExitProcess((UINT)nResult);
 }
 
 /* The linker entry point. The loader jumps here with a 16-byte aligned stack,
@@ -133,7 +133,7 @@ static void gui_startup(void)
  * core/utils_entry.c splits x_entry_point from x_startup. */
 void __cdecl x_gui_entry_point(void)
 {
-    gui_startup();
+	gui_startup();
 }
 
 #elif defined(_WIN32) /* hosted build: a normal WinMain forwards to gui_run */
@@ -142,19 +142,19 @@ void __cdecl x_gui_entry_point(void)
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nShowCmd)
 {
-  (void)hInstance;
-  (void)hPrevInstance;
-  (void)lpCmdLine;
-  (void)nShowCmd;
+	(void)hInstance;
+	(void)hPrevInstance;
+	(void)lpCmdLine;
+	(void)nShowCmd;
 
-  return gui_run();
+	return gui_run();
 }
 
 #else /* Linux / other: plain main */
 
 int main(void)
 {
-  return gui_run();
+	return gui_run();
 }
 
 #endif

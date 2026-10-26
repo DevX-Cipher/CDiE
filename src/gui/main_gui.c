@@ -942,7 +942,7 @@ static int opt_check_update(void* u, char* out, size_t cap)
   HINSTANCE r;
   (void)u;
   r = ShellExecuteW(NULL, L"open",
-    L"https://github.com/horsicq/Detect-It-Easy/releases",   
+    L"https://github.com/horsicq/CDiE/releases",   
     NULL, NULL, SW_SHOWNORMAL);
   if ((INT_PTR)r <= 32) {
     lstrcpynA(out, "Could not open the browser.", (int)cap);
