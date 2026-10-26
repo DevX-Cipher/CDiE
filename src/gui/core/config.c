@@ -308,7 +308,7 @@ int config_load(CdieConfig* cfg)
     else if (int_key(line, "aggressive", &cfg->aggressive)) {}
     else if (int_key(line, "hide_unknown", &cfg->hide_unknown)) {}
     else if (int_key(line, "format", &cfg->format)) {}
-    else if (int_key(line, "min_to_tray", &cfg->min_to_tray)) {}
+    else if (int_key(line, "monitor_downloads", &cfg->monitor_downloads)) {}
     else if (int_key(line, "db_extra", &cfg->db_extra)) {}
     else if (int_key(line, "db_custom", &cfg->db_custom)) {}
     else if (int_key(line, "sse2", &cfg->use_sse2)) {}
@@ -355,7 +355,7 @@ int config_save(const CdieConfig* cfg)
     fprintf(f, "db_extra=%d\ndb_custom=%d\n", cfg->db_extra, cfg->db_custom);
 
     fprintf(f, "\n[window]\n");
-    fprintf(f, "min_to_tray=%d\n", cfg->min_to_tray);
+    fprintf(f, "monitor_downloads=%d\n", cfg->monitor_downloads);
 
     fprintf(f, "\n[optimization]\n");
     fprintf(f, "sse2=%d\navx2=%d\n", cfg->use_sse2, cfg->use_avx2);

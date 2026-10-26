@@ -26,7 +26,7 @@ enum {
 };
 
 typedef struct OptionsScan {
-  int deep, heuristic, verbose, aggressive, hide_unknown, format, min_to_tray;
+  int deep, heuristic, verbose, aggressive, hide_unknown, format, monitor_downloads;
   int db_extra, db_custom;
 } OptionsScan;
 

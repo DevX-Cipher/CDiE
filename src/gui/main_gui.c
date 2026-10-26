@@ -54,6 +54,8 @@
 #include "controls/bottombar.h"
 #include "controls/treeview.h"
 #include "core/tray_win32.h"
+#include "core/dlwatch.h"
+
 
 #define IDC_EDIT_PATH      102
 #define IDC_COMBO_TYPE     104
@@ -78,7 +80,8 @@ enum gui_action {
   ACTION_NONE, ACTION_SCAN, ACTION_BROWSE,
   ACTION_OPTIONS, ACTION_ABOUT, ACTION_REPORT,
   ACTION_DATABASE_PATHS,
-  ACTION_SIGNATURES, ACTION_STRINGS
+  ACTION_SIGNATURES, ACTION_STRINGS,
+  ACTION_MONITOR
 };
 
 static xxwidgets_app* g_app;
@@ -97,17 +100,17 @@ static Bottombar* g_bottombar;
 static ResultsTree* g_tree;
 
 static int  g_running, g_pending;
+static int  g_startMonitor;
 static char* g_typePath;
 static char* g_lastPath;
 static int  g_minWindowWidth = 900;
 static int  g_minWindowHeight = 540;
+static int g_prefsReady;
 
 static int g_bFlagDeep = 1, g_bFlagHeur = 1, g_bFlagVerbose = 1;
 static int g_bFlagAggr, g_bFlagHideUnknown, g_bFlagFormat;
 static int g_bDbExtra = 1, g_bDbCustom = 1;
 static void layout(void);
-
-
 
 static void on_tray_exit(void* user)
 {
@@ -702,7 +705,7 @@ static void opt_get_scan(void* u, OptionsScan* o)
   o->aggressive = g_bFlagAggr; o->hide_unknown = g_bFlagHideUnknown;
   o->format = g_bFlagFormat;
   o->db_extra = g_bDbExtra; o->db_custom = g_bDbCustom;
-  o->min_to_tray = tray_get_enabled();
+  o->monitor_downloads = dlwatch_enabled();
 }
 
 static int opt_set_scan(void* u, const OptionsScan* o)
@@ -712,7 +715,8 @@ static int opt_set_scan(void* u, const OptionsScan* o)
   g_bFlagAggr = o->aggressive; g_bFlagHideUnknown = o->hide_unknown;
   g_bFlagFormat = o->format;
   g_bDbExtra = o->db_extra; g_bDbCustom = o->db_custom;
-  tray_set_enabled(o->min_to_tray);
+  if ((o->monitor_downloads != 0) != (dlwatch_enabled() != 0))
+    dlwatch_set_enabled(o->monitor_downloads ? 1 : 0);
   apply_flags_to_backend();
   return sync_panel_options() == XXWIDGETS_OK;
 }
@@ -928,7 +932,7 @@ static const char* opt_get_version(void* u)
 {
   const char* v = gui_backend_app_title();
   (void)u;
-  while (*v && *v != ' ') ++v;      /* title is "name version" */
+  while (*v && *v != ' ') ++v;     
   if (*v) ++v;
   return v;
 }
@@ -938,7 +942,7 @@ static int opt_check_update(void* u, char* out, size_t cap)
   HINSTANCE r;
   (void)u;
   r = ShellExecuteW(NULL, L"open",
-    L"https://github.com/horsicq/Detect-It-Easy/releases",   /* change to your releases page */
+    L"https://github.com/horsicq/Detect-It-Easy/releases",   
     NULL, NULL, SW_SHOWNORMAL);
   if ((INT_PTR)r <= 32) {
     lstrcpynA(out, "Could not open the browser.", (int)cap);
@@ -1124,6 +1128,25 @@ static void on_nav(void* user, int nav_id)
   }
 }
 
+static void mon_request_scan(const char* path, void* u)
+{
+  (void)u;
+  xxwidgets_widget_set_text(g_path, path);
+  g_pending = ACTION_SCAN;
+}
+
+static void mon_set_status(const char* text, void* u)
+{
+  (void)u;
+  xxwidgets_widget_set_text(g_status, text);
+}
+
+static void mon_restore_flags(void* u)
+{
+  (void)u;
+  apply_flags_to_backend();
+}
+
 static LRESULT CALLBACK window_subclass(HWND handle, UINT message,
   WPARAM wp, LPARAM lp,
   UINT_PTR subclass_id, DWORD_PTR reference)
@@ -1131,6 +1154,8 @@ static LRESULT CALLBACK window_subclass(HWND handle, UINT message,
   LRESULT tray_result;
   (void)subclass_id; (void)reference;
   if (tray_handle_message(handle, message, wp, lp, &tray_result))
+    return tray_result;
+  if (dlwatch_handle_message(handle, message, wp, lp, &tray_result))
     return tray_result;
   switch (message) {
   case WM_GETMINMAXINFO: {
@@ -1237,7 +1262,8 @@ static int create_controls(void)
       { "F5",          ACTION_SCAN },
       { "Ctrl+O",      ACTION_BROWSE },
       { "F1",          ACTION_ABOUT },
-      { "Ctrl+Shift+D",ACTION_DATABASE_PATHS }
+      { "Ctrl+Shift+D",ACTION_DATABASE_PATHS },
+      { "Ctrl+M",      ACTION_MONITOR }
   };
 
   if (!create_control(&g_path, XXWIDGETS_EDIT, "", IDC_EDIT_PATH) ||
@@ -1322,9 +1348,6 @@ static int set_startup_file(void)
   return has_file;
 }
 
-static int g_prefsReady;   /* set once saved prefs have been applied at startup */
-
-/* Copy the live settings into cfg so the whole file gets written */
 static void fill_prefs(CdieConfig* cfg)
 {
   OptionsOptimization opt;
@@ -1336,7 +1359,7 @@ static void fill_prefs(CdieConfig* cfg)
   cfg->verbose = g_bFlagVerbose;     cfg->aggressive = g_bFlagAggr;
   cfg->hide_unknown = g_bFlagHideUnknown; cfg->format = g_bFlagFormat;
   cfg->db_extra = g_bDbExtra;        cfg->db_custom = g_bDbCustom;
-  cfg->min_to_tray = tray_get_enabled();
+  cfg->monitor_downloads = dlwatch_enabled();
 
   if (opt_get_opt(NULL, &opt)) {
     cfg->use_sse2 = opt.use_sse2;
@@ -1416,7 +1439,7 @@ static void apply_saved_prefs(void)
   g_bFlagVerbose = cfg.verbose;     g_bFlagAggr = cfg.aggressive;
   g_bFlagHideUnknown = cfg.hide_unknown; g_bFlagFormat = cfg.format;
   g_bDbExtra = cfg.db_extra;        g_bDbCustom = cfg.db_custom;
-  tray_set_enabled(cfg.min_to_tray);
+  g_startMonitor = cfg.monitor_downloads;
   apply_flags_to_backend();
   sync_panel_options();
 
@@ -1487,6 +1510,16 @@ int gui_run(void)
   }
 
   tray_init(on_tray_exit, NULL);
+  {
+    DlWatchHost mh;
+    ZeroMemory(&mh, sizeof(mh));
+    mh.hwnd = native(g_window);
+    mh.request_scan = mon_request_scan;
+    mh.set_status = mon_set_status;
+    mh.restore_flags = mon_restore_flags;
+    dlwatch_init(&mh);
+  }
+  tray_set_callbacks(dlwatch_balloon_click, NULL, dlwatch_menu_toggle, NULL);
   SetWindowPos(native(g_window), NULL, 0, 0, 1150, 700, SWP_NOMOVE | SWP_NOZORDER);
   db_ok = init_backend_with_config();
   apply_saved_prefs();          /* before the status text, since set_fonts writes one */
@@ -1507,6 +1540,7 @@ int gui_run(void)
   xxwidgets_widget_set_visible(g_window, 1);
   xxwidgets_widget_focus(g_path);
   if (set_startup_file()) do_scan();
+  if (g_startMonitor) dlwatch_set_enabled(1);
   if (!db_ok) g_pending = ACTION_DATABASE_PATHS;
 
   g_running = 1;
@@ -1521,6 +1555,7 @@ int gui_run(void)
     case ACTION_BROWSE:         do_browse();         break;
     case ACTION_OPTIONS:        do_options_window(OPTIONS_PAGE_SCAN); break;
     case ACTION_ABOUT:          do_about();          break;
+    case ACTION_MONITOR:        dlwatch_set_enabled(!dlwatch_enabled()); break;    
     case ACTION_DATABASE_PATHS: do_options_window(OPTIONS_PAGE_DATABASES); break;
     case ACTION_SIGNATURES:     signatures_show(g_app, g_window); break;
     case ACTION_STRINGS:
@@ -1537,6 +1572,7 @@ int gui_run(void)
   }
 
 finish:
+  dlwatch_shutdown();
   tray_remove();
   save_config_on_exit();
   gui_backend_shutdown();
