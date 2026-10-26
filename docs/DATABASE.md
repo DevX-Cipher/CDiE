@@ -39,6 +39,37 @@ empty. Sub-directories inside a format directory (`PE/dotnet_only`,
 `PE/native_only`, `_icons`, `.vscode`) are **not** scanned — the reference
 loader is non-recursive, and `cdie` matches that.
 
+## Signature tags
+
+Per-signature tags live in `db/_metadata/<type>.txt`. Each non-empty line has
+this form:
+
+```text
+<relative-name>#TAG1;TAG2
+```
+
+`<type>` is the database format directory and `<relative-name>` is the
+signature path within it. The separator is the **last** `#` on the line, so a
+signature name such as `protector_CC#3.2.sg` remains valid. Tags are separated
+with semicolons. Readers also accept older comma-separated metadata. Metadata
+tag names match case-insensitively and exactly; a filter for `build` does not
+match `build-tool`.
+
+`--includetags` (alias `--include-tags`) runs a signature when it has any tag
+in the requested list. `--excludetags` (alias `--exclude-tags`) skips a
+signature when it has any excluded tag, and exclusion takes precedence when a
+tag matches both filters. Command-line lists use semicolons, for example
+`--includetags "build;protection"`. An empty include list permits every tag;
+an empty exclude list excludes none. Framework `_init` scripts are not normal
+signature-loop entries and continue to run regardless of these filters.
+
+Metadata mappings remain in the combined database after the main database is
+loaded. Signatures appended later from the custom database therefore receive
+matching tags from the main metadata index, including entries whose relative
+names were not present in the main database itself. Extra databases use their
+own `_metadata` directory, so a same-named extra signature cannot inherit or
+replace a main/custom tag accidentally.
+
 ## Load order and priority
 
 Three databases are loaded in sequence: main (`-D`), extra (`-E`), custom

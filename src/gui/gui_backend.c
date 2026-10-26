@@ -42,6 +42,8 @@ static xx_scan_options g_options;
 static DBase g_db;
 static int g_bInited = 0;
 static int g_bMainLoaded = 0;
+static char *g_pIncludeTags = NULL;
+static char *g_pExcludeTags = NULL;
 
 /* Mirrors main_console.c's resolve_database_path with no explicit path: use
  * "<exe-dir>/<name>" when it exists, else the bare relative name. */
@@ -162,6 +164,45 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
 int gui_backend_signature_count(void)
 {
     return g_db.nCount;
+}
+
+char *gui_backend_used_tags(void)
+{
+    return db_get_used_tags(g_bInited ? &g_db : NULL);
+}
+
+int gui_backend_set_tag_filters(const char *pIncludeTags, const char *pExcludeTags)
+{
+    char *pNewInclude = NULL;
+    char *pNewExclude = NULL;
+
+    if (!g_bInited) {
+        return 0;
+    }
+
+    if ((pIncludeTags != NULL) && (pIncludeTags[0] != 0)) {
+        pNewInclude = cdie_strdup(pIncludeTags);
+        if (pNewInclude == NULL) {
+            return 0;
+        }
+    }
+
+    if ((pExcludeTags != NULL) && (pExcludeTags[0] != 0)) {
+        pNewExclude = cdie_strdup(pExcludeTags);
+        if (pNewExclude == NULL) {
+            xx_rt_free(pNewInclude);
+            return 0;
+        }
+    }
+
+    xx_rt_free(g_pIncludeTags);
+    xx_rt_free(g_pExcludeTags);
+    g_pIncludeTags = pNewInclude;
+    g_pExcludeTags = pNewExclude;
+    g_options.include_tags = g_pIncludeTags;
+    g_options.exclude_tags = g_pExcludeTags;
+
+    return 1;
 }
 
 const char *gui_backend_app_title(void)
@@ -402,6 +443,12 @@ void gui_backend_shutdown(void)
 {
     if (g_bInited) {
         db_free(&g_db);
+        xx_rt_free(g_pIncludeTags);
+        xx_rt_free(g_pExcludeTags);
+        g_pIncludeTags = NULL;
+        g_pExcludeTags = NULL;
+        g_options.include_tags = NULL;
+        g_options.exclude_tags = NULL;
         xx_scan_options_free(&g_options);
         xx_rt_memset(&g_db, 0, sizeof(g_db));
         g_bInited = 0;

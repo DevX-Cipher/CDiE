@@ -308,11 +308,16 @@ Each entry has `Number`, `Name`, `VirtualSize`, `VirtualAddress`, `FileSize`,
 
 `isExportFunctionPresent(name)`, `getNumberOfExportFunctions()` /
 `getNumberOfExports()`, `getExportFunctionName(n)` /
-`getExportNameByNumber(n)`, `isExportPresent()`.
+`getExportNameByNumber(n)`, `getNextNamedExportFunctionIndex(previousSlot)`,
+`isExportPresent()`. Start named-export iteration with `previousSlot == -1`;
+the iterator returns the next original export-table slot, or `-1` at the end.
 
 `PE/_init` adds the regular-expression variants `isLibraryPresentExp`,
 `isExportFunctionPresentExp`, `isSectionNamePresentExp` and
-`isResourceNamePresentExp`.
+`isResourceNamePresentExp`. It also adds the compact cached accessors
+`getNumberOfNamedExportFunctions()`, `getNamedExportFunctionIndex(n)` and
+`getNamedExportFunctionName(n)`; the index accessor returns the original
+export-table slot.
 
 ### Resources and version info
 
@@ -373,6 +378,35 @@ validation. It retains permissive DWORD-aligned pointers, strict structural
 checks for WORD-aligned records, indirect table references, and the existing
 treatment of zero-length or reversed ranges. It does not change the file
 cursor or PE inspection state.
+
+### Guard CF function-table validation (cdie extension)
+
+`PE.validateGuardCfFunctionTable(tableRva, entryCount, entrySize)` runs the
+generic PE heuristic's Guard CF function-table checks in native code.
+`tableRva` and `entryCount` are unsigned 32-bit integers. `entrySize` is from
+4 through 19 bytes: each entry begins with a little-endian function RVA, and
+the remaining bytes are the optional per-entry metadata selected by
+`GuardFlags[31:28]`.
+
+The result is an object with `status`, `entryIndex`, and `functionRva`:
+
+| `status` | Meaning |
+| --- | --- |
+| `0` | Every entry passes these heuristic checks. |
+| `1` | The first failing entry has an RVA lower than the preceding entry. |
+| `2` | The first failing entry points outside file-backed executable code. |
+
+For statuses `1` and `2`, `entryIndex` is the zero-based index of the first
+failing entry and `functionRva` is its RVA. Both fields are zero for status
+`0`. Equal adjacent RVAs are valid. The table is streamed in entry-aligned
+chunks, and the call does not change the file cursor or PE inspection state.
+
+`null` means native validation is unavailable, for example because an
+argument is invalid, the complete table is not file-backed, address precision
+is unsupported, or an allocation or read fails. It is not a validity result:
+use the existing JavaScript validator. Databases shared with other engines
+must also check
+`typeof PE.validateGuardCfFunctionTable === "function"` before calling it.
 
 ### Debug directory
 

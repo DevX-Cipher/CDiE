@@ -23,7 +23,7 @@
 #endif
 
 enum { ACTION_NONE, ACTION_SCAN, ACTION_REPORT, ACTION_PATH, ACTION_QUIT, ACTION_HELP };
-enum { MIN_COLUMNS = 64, MIN_ROWS = 22 };
+enum { MIN_COLUMNS = 64, MIN_ROWS = 25 };
 
 typedef struct tui_options {
     const char *file, *main_db, *extra_db, *custom_db;
@@ -45,14 +45,15 @@ static const char help_text[] =
     "Enter a file path, then press Enter or F5 to scan.\n"
     "Ctrl+O focuses the path. Ctrl+R or Ctrl+P opens the full report. Ctrl+Q exits.\n"
     "Tab / Shift+Tab move between controls. Enter opens a choice list;\n"
-    "Up / Down select an item, Space toggles a scan flag, Escape closes the list.\n"
+    "Up / Down select an item, Space toggles a scan flag or tag, Escape closes the list.\n"
     "Results: Up / Down, Home / End and PageUp / PageDown scroll;\n"
     "Left / Right collapse or expand; Shift+Left / Shift+Right scroll sideways.\n"
     "A scan runs on a worker. After one second its progress dialog offers Cancel.\n"
-    "Flags and database checks apply to the next scan. Main database is always used.\n"
+    "Flags, database checks and include/exclude tags apply to the next scan.\n"
+    "Main database is always used. Empty include tags allow every signature.\n"
     "Database folders default to db, db_extra, db_custom beside the executable\n"
     "or in the current directory. Override them with -D, -E and -C at startup.\n"
-    "Use a terminal of at least 64 columns and 22 rows.";
+    "Use a terminal of at least 64 columns and 25 rows.";
 
 static void print_help(void)
 {
@@ -194,7 +195,7 @@ static int layout(tui_app *ui)
     if (small) {
         if (xxwidgets_widget_set_rect(ui->status, (xxwidgets_rect){0, 0, width, 1}) != XXWIDGETS_OK ||
             xxwidgets_widget_set_rect(ui->quit, (xxwidgets_rect){0, height > 2 ? 2 : 0, width < 10 ? width : 10, 1}) != XXWIDGETS_OK) return 0;
-        set_status(ui, "Resize terminal to at least 64 columns x 22 rows.");
+        set_status(ui, "Resize terminal to at least 64 columns x 25 rows.");
         (void)xxwidgets_widget_focus(ui->quit);
     } else {
         if (xxwidgets_widget_set_rect(ui->path_label, (xxwidgets_rect){1, 1, 5, 1}) != XXWIDGETS_OK ||
@@ -307,9 +308,30 @@ static char *read_path(tui_app *ui)
     return path;
 }
 
+static char *read_tags(const xxwidgets_scan_panel *panel, int include)
+{
+    size_t size = 0;
+    char *tags;
+    xxwidgets_status status = include ?
+        xxwidgets_scan_panel_get_include_tags(panel, NULL, 0, &size) :
+        xxwidgets_scan_panel_get_exclude_tags(panel, NULL, 0, &size);
+    if (status != XXWIDGETS_OK || !size) return NULL;
+    tags = (char *)malloc(size);
+    if (!tags) return NULL;
+    status = include ?
+        xxwidgets_scan_panel_get_include_tags(panel, tags, size, NULL) :
+        xxwidgets_scan_panel_get_exclude_tags(panel, tags, size, NULL);
+    if (status != XXWIDGETS_OK) {
+        free(tags);
+        return NULL;
+    }
+    return tags;
+}
+
 static int scan(tui_app *ui, int smoke)
 {
     char message[192], *type = NULL, *path = read_path(ui);
+    char *include_tags = NULL, *exclude_tags = NULL;
     xx_var selected = {0};
     unsigned int flags = 0, databases = 0;
     int cancelled = 0, ok = 0;
@@ -329,6 +351,11 @@ static int scan(tui_app *ui, int smoke)
         xxwidgets_scan_panel_get_databases(ui->panel, &databases) != XXWIDGETS_OK) {
         set_status(ui, "Cannot read the selected scan options."); goto cleanup;
     }
+    include_tags = read_tags(ui->panel, 1);
+    exclude_tags = read_tags(ui->panel, 0);
+    if (!include_tags || !exclude_tags || !gui_backend_set_tag_filters(include_tags, exclude_tags)) {
+        set_status(ui, "Cannot apply the selected tag filters."); goto cleanup;
+    }
     gui_backend_set_flags(flags & XXWIDGETS_SCAN_DEEP, flags & XXWIDGETS_SCAN_HEURISTIC,
         flags & XXWIDGETS_SCAN_VERBOSE, flags & XXWIDGETS_SCAN_AGGRESSIVE,
         flags & XXWIDGETS_SCAN_HIDE_UNKNOWN, flags & XXWIDGETS_SCAN_FORMAT);
@@ -344,6 +371,8 @@ static int scan(tui_app *ui, int smoke)
     (void)xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 1);
 cleanup:
     gui_backend_free(type);
+    free(include_tags);
+    free(exclude_tags);
     free(path);
     return ok;
 }
@@ -354,6 +383,7 @@ static int create_controls(tui_app *ui, const char *startup, int smoke)
         {"F5", ACTION_SCAN}, {"Ctrl+R", ACTION_REPORT}, {"Ctrl+P", ACTION_REPORT},
         {"Ctrl+O", ACTION_PATH}, {"Ctrl+Q", ACTION_QUIT}, {"F1", ACTION_HELP}
     };
+    char *tags;
     if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW, gui_backend_app_title(), (xxwidgets_rect){0, 0, 78, 23}, &ui->window) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, "File:", (xxwidgets_rect){1, 1, 5, 1}, &ui->path_label) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_EDIT, startup ? startup : "", (xxwidgets_rect){6, 0, 71, 3}, &ui->path) != XXWIDGETS_OK ||
@@ -362,6 +392,13 @@ static int create_controls(tui_app *ui, const char *startup, int smoke)
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, "Help F1", (xxwidgets_rect){56, 19, 10, 2}, &ui->help) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, "Quit", (xxwidgets_rect){67, 19, 10, 2}, &ui->quit) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, "", (xxwidgets_rect){1, 22, 76, 1}, &ui->status) != XXWIDGETS_OK) return 0;
+    tags = gui_backend_used_tags();
+    if (!tags) return 0;
+    if (xxwidgets_scan_panel_set_available_tags(ui->panel, tags) != XXWIDGETS_OK) {
+        gui_backend_free(tags);
+        return 0;
+    }
+    gui_backend_free(tags);
     if (xxwidgets_window_set_shortcuts(ui->window, shortcuts, sizeof(shortcuts) / sizeof(shortcuts[0])) != XXWIDGETS_OK ||
         xxwidgets_scan_panel_set_flags(ui->panel, XXWIDGETS_SCAN_DEEP | XXWIDGETS_SCAN_HEURISTIC | XXWIDGETS_SCAN_VERBOSE | XXWIDGETS_SCAN_FORMAT) != XXWIDGETS_OK ||
         xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0) != XXWIDGETS_OK ||

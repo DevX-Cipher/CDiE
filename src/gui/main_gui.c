@@ -73,6 +73,8 @@
 #define IDC_BTN_FONTS    116
 #define IDC_BTN_CONTEXT  117
 #define IDC_BTN_OPTIMIZATION 118
+#define IDC_COMBO_INCLUDE_TAGS 119
+#define IDC_COMBO_EXCLUDE_TAGS 120
 
 enum gui_action { ACTION_NONE, ACTION_SCAN, ACTION_BROWSE,
                   ACTION_OPTIONS, ACTION_ABOUT, ACTION_REPORT,
@@ -83,6 +85,7 @@ static xxwidgets_app *g_app;
 static xxwidgets_widget *g_window, *g_fileLabel, *g_path, *g_browse, *g_type;
 static xxwidgets_widget *g_flags, *g_databases, *g_msec, *g_scan, *g_results;
 static xxwidgets_widget *g_typeLabel, *g_flagLabel, *g_databaseLabel, *g_databasePaths;
+static xxwidgets_widget *g_includeTags, *g_excludeTags, *g_includeTagsLabel, *g_excludeTagsLabel;
 static xxwidgets_widget *g_options, *g_aboutButton, *g_reportButton, *g_exit, *g_status;
 static xxwidgets_widget *g_fontsButton, *g_contextButton;
 static xxwidgets_widget *g_optimizationButton;
@@ -141,6 +144,42 @@ static unsigned int databases_mask(void)
     return (g_bDbExtra ? 1u : 0u) | (g_bDbCustom ? 2u : 0u);
 }
 
+static xxwidgets_status refresh_panel_tags(void)
+{
+    char *pTags = gui_backend_used_tags();
+    xxwidgets_status status;
+    if (pTags == NULL) return XXWIDGETS_OUT_OF_MEMORY;
+    status = xxwidgets_scan_panel_set_available_tags(g_panel, pTags);
+    gui_backend_free(pTags);
+    return status;
+}
+
+static xxwidgets_status apply_panel_tag_filters(void)
+{
+    SIZE_T nInclude = 0, nExclude = 0;
+    char *pInclude = NULL, *pExclude = NULL;
+    xxwidgets_status status = xxwidgets_scan_panel_get_include_tags(g_panel, NULL, 0, &nInclude);
+    if (status == XXWIDGETS_OK)
+        status = xxwidgets_scan_panel_get_exclude_tags(g_panel, NULL, 0, &nExclude);
+    if (status != XXWIDGETS_OK) return status;
+
+    pInclude = (char *)HeapAlloc(GetProcessHeap(), 0, nInclude ? nInclude : 1);
+    pExclude = (char *)HeapAlloc(GetProcessHeap(), 0, nExclude ? nExclude : 1);
+    if (!pInclude || !pExclude) {
+        if (pInclude) HeapFree(GetProcessHeap(), 0, pInclude);
+        if (pExclude) HeapFree(GetProcessHeap(), 0, pExclude);
+        return XXWIDGETS_OUT_OF_MEMORY;
+    }
+    status = xxwidgets_scan_panel_get_include_tags(g_panel, pInclude, nInclude ? nInclude : 1, NULL);
+    if (status == XXWIDGETS_OK)
+        status = xxwidgets_scan_panel_get_exclude_tags(g_panel, pExclude, nExclude ? nExclude : 1, NULL);
+    if (status == XXWIDGETS_OK && !gui_backend_set_tag_filters(pInclude, pExclude))
+        status = XXWIDGETS_OUT_OF_MEMORY;
+    HeapFree(GetProcessHeap(), 0, pInclude);
+    HeapFree(GetProcessHeap(), 0, pExclude);
+    return status;
+}
+
 static xxwidgets_status sync_panel_options(void)
 {
     xxwidgets_status status = xxwidgets_scan_panel_set_flags(g_panel, flags_mask());
@@ -155,6 +194,8 @@ static xxwidgets_status read_panel_options(void)
     xxwidgets_status status = xxwidgets_scan_panel_get_flags(g_panel, &flags);
     if (status == XXWIDGETS_OK)
         status = xxwidgets_scan_panel_get_databases(g_panel, &databases);
+    if (status == XXWIDGETS_OK)
+        status = apply_panel_tag_filters();
     if (status != XXWIDGETS_OK) return status;
     g_bFlagDeep = (flags & 1u) != 0; g_bFlagHeur = (flags & 2u) != 0;
     g_bFlagVerbose = (flags & 4u) != 0; g_bFlagAggr = (flags & 8u) != 0;
@@ -589,6 +630,13 @@ static void do_database_paths(void)
     if (accepted == 1) {
         WCHAR text[160];
         clear_scan();
+        {
+            xxwidgets_status status = refresh_panel_tags();
+            if (status != XXWIDGETS_OK) {
+                report_ui_error("Refresh signature tags", status);
+                return;
+            }
+        }
         wsprintfW(text, L"Database reloaded: %d signatures. Choose a file and press Scan.", gui_backend_signature_count());
         set_status_wide(text);
     } else if (accepted == -1) report_ui_error("Open database paths", XXWIDGETS_PLATFORM_ERROR);
@@ -653,9 +701,11 @@ static void layout(void)
 {
     RECT bounds, window_bounds;
     TEXTMETRICW metrics, edit_metrics;
-    int width, height, results_bottom, row = 26, label = 16, path_y, label_y, choices_y, results_y;
+    int width, height, results_bottom, row = 26, label = 16, path_y, label_y, choices_y;
+    int tag_label_y, tag_choices_y, results_y;
     int settings_width[5], settings_x, required_width, status_height = 36;
     int type_width, flags_width, databases_width, flags_x, databases_x;
+    int include_tags_width, exclude_tags_width, tag_column_width;
     int scan_width, browse_width, about_width, report_width, exit_width;
     const int margin = 10, gap = 8;
     if (!g_results) return;
@@ -676,6 +726,12 @@ static void layout(void)
     type_width = combo_text_width(g_type, control_text_width(g_typeLabel, 190));
     flags_width = combo_text_width(g_flags, control_text_width(g_flagLabel, 180));
     databases_width = combo_text_width(g_databases, control_text_width(g_databaseLabel, 170));
+    /* Signature databases are user-extensible, so a tag can be arbitrarily
+     * long.  Keep the selectors comfortably usable without letting one tag
+     * force the window's hard minimum wider than the monitor; the native
+     * combo keeps the full text available in its drop-down. */
+    include_tags_width = control_text_width(g_includeTagsLabel, 250);
+    exclude_tags_width = control_text_width(g_excludeTagsLabel, 250);
     flags_x = margin + type_width + gap;
     databases_x = flags_x + flags_width + gap;
     settings_width[0] = control_text_width(g_options, 110);
@@ -691,10 +747,14 @@ static void layout(void)
         required_width = about_width + report_width + exit_width + 12 + 2 * margin;
     if (30 * edit_metrics.tmAveCharWidth + browse_width + gap + 2 * margin > required_width)
         required_width = 30 * edit_metrics.tmAveCharWidth + browse_width + gap + 2 * margin;
+    if (include_tags_width + exclude_tags_width + gap + 2 * margin > required_width)
+        required_width = include_tags_width + exclude_tags_width + gap + 2 * margin;
     path_y = margin + label + 2;
     label_y = path_y + row + gap;
     choices_y = label_y + label + 2;
-    results_y = choices_y + row + 10;
+    tag_label_y = choices_y + row + gap;
+    tag_choices_y = tag_label_y + label + 2;
+    results_y = tag_choices_y + row + 10;
     GetClientRect(native(g_window), &bounds);
     width = bounds.right; height = bounds.bottom;
     GetWindowRect(native(g_window), &window_bounds);
@@ -717,6 +777,11 @@ static void layout(void)
     MoveWindow(native(g_databases), databases_x, choices_y, databases_width, row, TRUE);
     MoveWindow(native(g_msec), width - margin - scan_width, label_y, scan_width, label, TRUE);
     MoveWindow(native(g_scan), width - margin - scan_width, choices_y, scan_width, row, TRUE);
+    tag_column_width = (width - 2 * margin - gap) / 2;
+    MoveWindow(native(g_includeTagsLabel), margin, tag_label_y, tag_column_width, label, TRUE);
+    MoveWindow(native(g_includeTags), margin, tag_choices_y, tag_column_width, row, TRUE);
+    MoveWindow(native(g_excludeTagsLabel), margin + tag_column_width + gap, tag_label_y, tag_column_width, label, TRUE);
+    MoveWindow(native(g_excludeTags), margin + tag_column_width + gap, tag_choices_y, tag_column_width, row, TRUE);
     results_bottom = height - margin - 2 * row - 3 * gap - status_height;
     if (results_bottom < results_y + 40) results_bottom = results_y + 40;
     MoveWindow(native(g_results), margin, results_y, width - 2 * margin, results_bottom - results_y, TRUE);
@@ -790,7 +855,8 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         else if (event->widget == g_contextButton) g_pending = ACTION_CONTEXT;
         else if (event->widget == g_optimizationButton) g_pending = ACTION_OPTIMIZATION;
     } else if (event->type == XXWIDGETS_EVENT_CHANGE &&
-               (event->widget == g_flags || event->widget == g_databases)) {
+               (event->widget == g_flags || event->widget == g_databases ||
+                event->widget == g_includeTags || event->widget == g_excludeTags)) {
         xxwidgets_status status = read_panel_options();
         if (status != XXWIDGETS_OK) report_ui_error("Read scan options", status);
     } else if (event->type == XXWIDGETS_EVENT_CHANGE && event->widget == g_path && g_type) {
@@ -837,16 +903,23 @@ static int create_controls(void)
     g_typeLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_FILE_TYPE_LABEL);
     g_flags = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_FLAGS);
     g_databases = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_DATABASES);
+    g_includeTags = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_INCLUDE_TAGS);
+    g_excludeTags = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_EXCLUDE_TAGS);
     g_scan = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_SCAN);
     g_reportButton = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_REPORT);
     g_results = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_RESULTS);
     g_flagLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_FLAGS_LABEL);
     g_databaseLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_DATABASES_LABEL);
+    g_includeTagsLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_INCLUDE_TAGS_LABEL);
+    g_excludeTagsLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_EXCLUDE_TAGS_LABEL);
     if (!g_type || !g_typeLabel || !g_flags || !g_databases || !g_scan || !g_reportButton || !g_results ||
-        !g_flagLabel || !g_databaseLabel || sync_panel_options() != XXWIDGETS_OK) return 0;
+        !g_flagLabel || !g_databaseLabel || !g_includeTags || !g_excludeTags ||
+        !g_includeTagsLabel || !g_excludeTagsLabel || sync_panel_options() != XXWIDGETS_OK) return 0;
     SetWindowLongPtrW(native(g_type), GWLP_ID, IDC_COMBO_TYPE);
     SetWindowLongPtrW(native(g_flags), GWLP_ID, IDC_COMBO_FLAGS);
     SetWindowLongPtrW(native(g_databases), GWLP_ID, IDC_COMBO_DATABASES);
+    SetWindowLongPtrW(native(g_includeTags), GWLP_ID, IDC_COMBO_INCLUDE_TAGS);
+    SetWindowLongPtrW(native(g_excludeTags), GWLP_ID, IDC_COMBO_EXCLUDE_TAGS);
     SetWindowLongPtrW(native(g_scan), GWLP_ID, IDC_BTN_SCAN);
     SetWindowLongPtrW(native(g_reportButton), GWLP_ID, IDC_BTN_REPORT);
     SetWindowLongPtrW(native(g_results), GWLP_ID, IDC_SCANRESULTS);
@@ -1047,7 +1120,7 @@ static BOOL CALLBACK smoke_windows(HWND window, LPARAM data)
                 SendMessageW(optimization[13], BM_CLICK, 0, 0);
                 g_smokePhase = 1;
                 return FALSE;
-            } else SendMessageW(optimization[g_smokeAction == 5 ? 13 : 14], BM_CLICK, 0, 0);
+            } else SendMessageW(optimization[g_smokeAction == 5 ? 14 : 15], BM_CLICK, 0, 0);
         }
 optimization_done:;
     } else if (g_smokeAction == 3) {
@@ -1106,16 +1179,29 @@ static int run_smoke(void)
 {
     xxwidgets_scan_result row = {"Compiler", "Microsoft Visual C/C++", "19.29", "Smoke test"};
     unsigned int flags, databases;
+    RECT include_label_bounds, include_bounds, exclude_label_bounds, exclude_bounds, results_bounds;
     WCHAR class_name[32];
     SIZE_T report_length = 0;
     xxwidgets_status status;
     if (!GetClassNameW(native(g_type), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
         !GetClassNameW(native(g_flags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
-        !GetClassNameW(native(g_databases), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX")) return smoke_failed(__LINE__);
+        !GetClassNameW(native(g_databases), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
+        !GetClassNameW(native(g_includeTags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
+        !GetClassNameW(native(g_excludeTags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX")) return smoke_failed(__LINE__);
+    GetWindowRect(native(g_includeTagsLabel), &include_label_bounds);
+    GetWindowRect(native(g_includeTags), &include_bounds);
+    GetWindowRect(native(g_excludeTagsLabel), &exclude_label_bounds);
+    GetWindowRect(native(g_excludeTags), &exclude_bounds);
+    GetWindowRect(native(g_results), &results_bounds);
+    if (include_label_bounds.bottom > include_bounds.top || exclude_label_bounds.bottom > exclude_bounds.top ||
+        include_bounds.right >= exclude_bounds.left || include_bounds.bottom > results_bounds.top ||
+        exclude_bounds.bottom > results_bounds.top) return smoke_failed(__LINE__);
     if (xxwidgets_widget_kind(g_results) != XXWIDGETS_TREEVIEW ||
         xxwidgets_widget_kind(g_type) != XXWIDGETS_COMBOBOX ||
         xxwidgets_widget_kind(g_flags) != XXWIDGETS_CHECKCOMBOBOX ||
         xxwidgets_widget_kind(g_databases) != XXWIDGETS_CHECKCOMBOBOX ||
+        xxwidgets_widget_kind(g_includeTags) != XXWIDGETS_CHECKCOMBOBOX ||
+        xxwidgets_widget_kind(g_excludeTags) != XXWIDGETS_CHECKCOMBOBOX ||
         xxwidgets_widget_kind(g_scan) != XXWIDGETS_BUTTON ||
         xxwidgets_widget_kind(g_reportButton) != XXWIDGETS_BUTTON ||
         xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 7u ||
@@ -1126,11 +1212,35 @@ static int run_smoke(void)
         xxwidgets_scan_panel_get_report(g_panel, NULL, 0, &report_length) != XXWIDGETS_OK ||
         report_length <= 1) return smoke_failed(__LINE__);
     if (gui_backend_signature_count() > 0) {
+        SIZE_T include_size = 0, exclude_size = 0;
+        char *include_tags, *exclude_tags;
         WCHAR executable[32768];
         char status_text[512];
         size_t i, binary_index = SIZE_MAX;
         int type_id, binary_type = -1;
         DWORD length = GetModuleFileNameW(NULL, executable, (DWORD)(sizeof(executable) / sizeof(executable[0])));
+        if (!xxwidgets_combobox_count(g_includeTags) ||
+            xxwidgets_combobox_count(g_includeTags) != xxwidgets_combobox_count(g_excludeTags) ||
+            xxwidgets_checkcombobox_set_checked(g_includeTags, 0, 1) != XXWIDGETS_OK ||
+            xxwidgets_checkcombobox_set_checked(g_excludeTags, xxwidgets_combobox_count(g_excludeTags) - 1, 1) != XXWIDGETS_OK ||
+            xxwidgets_scan_panel_get_include_tags(g_panel, NULL, 0, &include_size) != XXWIDGETS_OK || include_size <= 1 ||
+            xxwidgets_scan_panel_get_exclude_tags(g_panel, NULL, 0, &exclude_size) != XXWIDGETS_OK || exclude_size <= 1)
+            return smoke_failed(__LINE__);
+        include_tags = (char *)HeapAlloc(GetProcessHeap(), 0, include_size);
+        exclude_tags = (char *)HeapAlloc(GetProcessHeap(), 0, exclude_size);
+        if (!include_tags || !exclude_tags ||
+            xxwidgets_scan_panel_get_include_tags(g_panel, include_tags, include_size, NULL) != XXWIDGETS_OK ||
+            xxwidgets_scan_panel_get_exclude_tags(g_panel, exclude_tags, exclude_size, NULL) != XXWIDGETS_OK ||
+            !include_tags[0] || !exclude_tags[0] || !gui_backend_set_tag_filters(include_tags, exclude_tags)) {
+            if (include_tags) HeapFree(GetProcessHeap(), 0, include_tags);
+            if (exclude_tags) HeapFree(GetProcessHeap(), 0, exclude_tags);
+            return smoke_failed(__LINE__);
+        }
+        HeapFree(GetProcessHeap(), 0, include_tags);
+        HeapFree(GetProcessHeap(), 0, exclude_tags);
+        if (xxwidgets_checkcombobox_set_checked(g_includeTags, 0, 0) != XXWIDGETS_OK ||
+            xxwidgets_checkcombobox_set_checked(g_excludeTags, xxwidgets_combobox_count(g_excludeTags) - 1, 0) != XXWIDGETS_OK ||
+            apply_panel_tag_filters() != XXWIDGETS_OK) return smoke_failed(__LINE__);
         if (!length || length >= sizeof(executable) / sizeof(executable[0])) return smoke_failed(__LINE__);
         if (!SetWindowTextW(native(g_path), executable) || IsWindowEnabled(native(g_type))) return smoke_failed(__LINE__);
         do_scan();
@@ -1340,6 +1450,8 @@ int gui_run(void)
         xxwidgets_widget_set_text(g_status,
             "Main signature database not found. Use Database paths to select the database folder.");
     }
+    status = refresh_panel_tags();
+    if (status != XXWIDGETS_OK) report_ui_error("Load signature tags", status);
     apply_flags_to_backend();
     layout();
     if (smoke) { result = run_smoke(); goto finish; }

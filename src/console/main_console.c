@@ -208,6 +208,8 @@ static void print_help(void)
     cdie_printf("  -D, --database <path>     Main database path.\n");
     cdie_printf("  -E, --extradatabase <p>   Extra database path.\n");
     cdie_printf("  -C, --customdatabase <p>  Custom database path.\n");
+    cdie_printf("      --includetags <list>  Run signatures matching any ';'-separated tag.\n");
+    cdie_printf("      --excludetags <list>  Skip signatures matching any ';'-separated tag.\n");
     cdie_printf("  -s, --showdatabase        Show the database information.\n");
     cdie_printf("      --createtar <path>    Create TAR archive from database.\n");
     cdie_printf("      --createprecompiledtar <p> Create precompiled bytecode TAR archive.\n");
@@ -476,6 +478,12 @@ int x_main(int argc, char *argv[])
             } else if ((xx_rt_strcmp(pArg, "--customdatabase") == 0) && (i + 1 < argc)) {
                 xx_rt_free(options.custom_database_path);
                 options.custom_database_path = cdie_strdup(argv[++i]);
+            } else if (((xx_rt_strcmp(pArg, "--includetags") == 0) ||
+                        (xx_rt_strcmp(pArg, "--include-tags") == 0)) && (i + 1 < argc)) {
+                options.include_tags = argv[++i];
+            } else if (((xx_rt_strcmp(pArg, "--excludetags") == 0) ||
+                        (xx_rt_strcmp(pArg, "--exclude-tags") == 0)) && (i + 1 < argc)) {
+                options.exclude_tags = argv[++i];
             } else if ((xx_rt_strcmp(pArg, "--createtar") == 0) && (i + 1 < argc)) {
                 pCreateTarPath = argv[++i];
             } else if ((xx_rt_strcmp(pArg, "--createprecompiledtar") == 0) && (i + 1 < argc)) {

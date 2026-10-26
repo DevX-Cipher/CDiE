@@ -219,6 +219,8 @@ accepted as an alias (shown in parentheses) except where it would collide.
 | `-D`, `--database <path>` | main database directory |
 | `-E`, `--extradatabase <path>` | extra database directory |
 | `-C`, `--customdatabase <path>` | custom database directory |
+| `--includetags`, `--include-tags <list>` | run signatures having any listed tag; separate tags with `;` |
+| `--excludetags`, `--exclude-tags <list>` | skip signatures having any listed tag; separate tags with `;` (exclusion wins) |
 | `-s`, `--showdatabase` | print database paths and signature counts |
 
 Output formats are mutually exclusive and may be selected only once. JSON and

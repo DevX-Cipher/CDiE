@@ -33,6 +33,37 @@ static xxwidgets_widget *control(xxwidgets_scan_panel_control_id which)
 {
     return xxwidgets_scan_panel_control(g_panel, which);
 }
+static xxwidgets_status refresh_panel_tags(void)
+{
+    char *tags = gui_backend_used_tags();
+    xxwidgets_status status;
+    if (!tags) return XXWIDGETS_OUT_OF_MEMORY;
+    status = xxwidgets_scan_panel_set_available_tags(g_panel, tags);
+    gui_backend_free(tags);
+    return status;
+}
+static xxwidgets_status apply_panel_tag_filters(void)
+{
+    size_t include_size = 0, exclude_size = 0;
+    char *include_tags = NULL, *exclude_tags = NULL;
+    xxwidgets_status status = xxwidgets_scan_panel_get_include_tags(g_panel, NULL, 0, &include_size);
+    if (status == XXWIDGETS_OK)
+        status = xxwidgets_scan_panel_get_exclude_tags(g_panel, NULL, 0, &exclude_size);
+    if (status != XXWIDGETS_OK) return status;
+    include_tags = malloc(include_size ? include_size : 1);
+    exclude_tags = malloc(exclude_size ? exclude_size : 1);
+    if (!include_tags || !exclude_tags) {
+        free(include_tags); free(exclude_tags);
+        return XXWIDGETS_OUT_OF_MEMORY;
+    }
+    status = xxwidgets_scan_panel_get_include_tags(g_panel, include_tags, include_size ? include_size : 1, NULL);
+    if (status == XXWIDGETS_OK)
+        status = xxwidgets_scan_panel_get_exclude_tags(g_panel, exclude_tags, exclude_size ? exclude_size : 1, NULL);
+    if (status == XXWIDGETS_OK && !gui_backend_set_tag_filters(include_tags, exclude_tags))
+        status = XXWIDGETS_OUT_OF_MEMORY;
+    free(include_tags); free(exclude_tags);
+    return status;
+}
 static void report_ui_error(const char *operation, xxwidgets_status status)
 {
     NSString *message = [NSString stringWithFormat:@"%s: %s", operation, xxwidgets_status_string(status)];
@@ -73,6 +104,11 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     else if (event->type == XXWIDGETS_EVENT_CHANGE && event->widget == g_path) {
         xxwidgets_scan_panel_clear(g_panel);
         xxwidgets_widget_set_enabled(control(XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
+    } else if (event->type == XXWIDGETS_EVENT_CHANGE &&
+               (event->widget == control(XXWIDGETS_SCAN_PANEL_INCLUDE_TAGS) ||
+                event->widget == control(XXWIDGETS_SCAN_PANEL_EXCLUDE_TAGS))) {
+        xxwidgets_status status = apply_panel_tag_filters();
+        if (status != XXWIDGETS_OK) report_ui_error("Read tag filters", status);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(XXWIDGETS_SCAN_PANEL_FILE_TYPE)) g_pending = ACTION_SCAN;
     else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == g_browse) g_pending = ACTION_OPEN;
@@ -141,6 +177,10 @@ static int do_scan(void)
     if (xxwidgets_combobox_get_current(combo, &type_id) != XXWIDGETS_OK || type_id.type != XX_VAR_TYPE_UINT64 ||
         xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK ||
         xxwidgets_scan_panel_get_databases(g_panel, &databases) != XXWIDGETS_OK) return 0;
+    {
+        xxwidgets_status status = apply_panel_tag_filters();
+        if (status != XXWIDGETS_OK) { report_ui_error("Read tag filters", status); return 0; }
+    }
     gui_backend_set_flags(flags & 1, flags & 2, flags & 4, flags & 8, flags & 16, flags & 32);
     gui_backend_set_databases(databases & 1, databases & 2);
     xxwidgets_widget_set_text(g_status, "Scanning…");
@@ -237,6 +277,13 @@ static void do_databases(CDIEApplication *delegate)
         return;
     }
     [[NSUserDefaults standardUserDefaults] setObject:values forKey:@"DatabasePaths"];
+    {
+        xxwidgets_status status = refresh_panel_tags();
+        if (status != XXWIDGETS_OK) {
+            report_ui_error("Refresh signature tags", status);
+            return;
+        }
+    }
     ready();
 }
 static void install_menu(CDIEApplication *delegate)
@@ -328,6 +375,23 @@ static int smoke_test(NSString *path)
     changed.use_arm_pmull = 2;
     if (gui_backend_set_optimization_options(&changed) || !gui_backend_set_optimization_options(&saved)) return 12;
     if (!gui_backend_signature_count()) { fprintf(stderr, "No bundled signatures loaded\n"); return 1; }
+    {
+        xxwidgets_widget *include_combo = control(XXWIDGETS_SCAN_PANEL_INCLUDE_TAGS);
+        xxwidgets_widget *exclude_combo = control(XXWIDGETS_SCAN_PANEL_EXCLUDE_TAGS);
+        size_t include_size = 0, exclude_size = 0;
+        if (xxwidgets_widget_kind(include_combo) != XXWIDGETS_CHECKCOMBOBOX ||
+            xxwidgets_widget_kind(exclude_combo) != XXWIDGETS_CHECKCOMBOBOX ||
+            !xxwidgets_combobox_count(include_combo) ||
+            xxwidgets_combobox_count(include_combo) != xxwidgets_combobox_count(exclude_combo) ||
+            xxwidgets_checkcombobox_set_checked(include_combo, 0, 1) != XXWIDGETS_OK ||
+            xxwidgets_checkcombobox_set_checked(exclude_combo, xxwidgets_combobox_count(exclude_combo) - 1, 1) != XXWIDGETS_OK ||
+            xxwidgets_scan_panel_get_include_tags(g_panel, NULL, 0, &include_size) != XXWIDGETS_OK || include_size <= 1 ||
+            xxwidgets_scan_panel_get_exclude_tags(g_panel, NULL, 0, &exclude_size) != XXWIDGETS_OK || exclude_size <= 1 ||
+            apply_panel_tag_filters() != XXWIDGETS_OK ||
+            xxwidgets_checkcombobox_set_checked(include_combo, 0, 0) != XXWIDGETS_OK ||
+            xxwidgets_checkcombobox_set_checked(exclude_combo, xxwidgets_combobox_count(exclude_combo) - 1, 0) != XXWIDGETS_OK ||
+            apply_panel_tag_filters() != XXWIDGETS_OK) return 14;
+    }
     const char *dropped_paths[] = {[path UTF8String], "/unused/second-file"};
     xxwidgets_event drop = {0};
     drop.type = XXWIDGETS_EVENT_DROP_FILES; drop.widget = g_window;
@@ -398,6 +462,8 @@ int main(int argc, char **argv)
                 [paths[1] isKindOfClass:[NSString class]] && [paths[2] isKindOfClass:[NSString class]])
                 gui_backend_set_db_paths([paths[0] UTF8String], [paths[1] UTF8String], [paths[2] UTF8String]);
         }
+        status = refresh_panel_tags();
+        if (status != XXWIDGETS_OK) { report_ui_error("Load signature tags", status); result = 1; goto finish; }
         ready(); layout();
         if (smoke) { result = smoke_test(startup ?: [[NSBundle mainBundle] executablePath]); goto finish; }
         [window center]; [window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];

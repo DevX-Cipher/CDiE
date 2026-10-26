@@ -29,6 +29,16 @@ set(X_MAINTAINER  "horsicq@gmail.com")
 # The warning flags themselves are applied further down, after xxfclib has been
 # added -- see the note there.
 
+# Compile only the optional format streams used by this application.
+if(NOT TARGET xxfclib::xxfclib)
+    set(XXFC_ENABLE_STREAM_DATASTRUCTS OFF)
+    set(XXFC_ENABLE_STREAM_IMPORT OFF)
+    set(XXFC_ENABLE_STREAM_EXPORT OFF)
+    set(XXFC_ENABLE_STREAM_RESOURCES OFF)
+    set(XXFC_ENABLE_STREAM_METADATA OFF)
+    set(XXFC_ENABLE_STREAM_SYMBOLS OFF)
+endif()
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)

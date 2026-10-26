@@ -60,6 +60,18 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
 /* Total number of signatures loaded across the three databases. */
 int gui_backend_signature_count(void);
 
+/* Returns the unique tags used by loaded signatures, sorted and joined with
+ * semicolons. The returned UTF-8 string is allocated by the engine and must be
+ * released with gui_backend_free. An initialized database with no tags yields
+ * an allocated empty string. */
+char *gui_backend_used_tags(void);
+
+/* Replaces the scan-time tag filters. Both arguments are semicolon-separated
+ * UTF-8 tag lists; NULL and empty strings mean no filter. The backend copies
+ * the strings, so callers may release or reuse their buffers after return.
+ * Allocation failure leaves both previous filters unchanged. */
+int gui_backend_set_tag_filters(const char *pIncludeTags, const char *pExcludeTags);
+
 /* "cdie <version>" (UTF-8) for the window title. Static storage; do not free. */
 const char *gui_backend_app_title(void);
 
