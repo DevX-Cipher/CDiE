@@ -25,7 +25,7 @@ enum { IK_HEAD, IK_TEXT, IK_NOTE, IK_CHECK, IK_BTN, IK_ACCENT, IK_VALUE, IK_PATH
 
 enum {
   ID_NONE,
-  ID_DEEP, ID_HEUR, ID_AGGR, ID_VERBOSE, ID_HIDE, ID_FORMAT, ID_TRAY,
+  ID_DEEP, ID_HEUR, ID_AGGR, ID_VERBOSE, ID_HIDE, ID_FORMAT, ID_MONITOR,
   ID_DBX, ID_DBC,
   ID_SSE2, ID_AVX2,
   ID_BUF_DEC, ID_BUF_INC, ID_FBUF_DEC, ID_FBUF_INC, ID_BUF_VAL, ID_FBUF_VAL,
@@ -155,7 +155,7 @@ static int* chk_ptr(Opt* o, int id)
   case ID_VERBOSE: return &o->scan.verbose;
   case ID_HIDE:    return &o->scan.hide_unknown;
   case ID_FORMAT:  return &o->scan.format;
-  case ID_TRAY:    return &o->scan.min_to_tray;
+  case ID_MONITOR: return &o->scan.monitor_downloads;
   case ID_DBX:     return &o->scan.db_extra;
   case ID_DBC:     return &o->scan.db_custom;
   case ID_SSE2:    return &o->opt.use_sse2;
@@ -182,7 +182,7 @@ static int apply_all(Opt* o)
     cfg.verbose = o->scan.verbose;     cfg.aggressive = o->scan.aggressive;
     cfg.hide_unknown = o->scan.hide_unknown; cfg.format = o->scan.format;
     cfg.db_extra = o->scan.db_extra;   cfg.db_custom = o->scan.db_custom;
-    cfg.min_to_tray = o->scan.min_to_tray;
+    cfg.monitor_downloads = o->scan.monitor_downloads;
     if (o->have_opt) {
       cfg.use_sse2 = o->opt.use_sse2;  cfg.use_avx2 = o->opt.use_avx2;
       cfg.buffer_size = (unsigned long long)o->opt.buffer_size;
@@ -289,7 +289,7 @@ static void build_items(Opt* o)
     add(o, IK_CHECK, ID_HIDE, "Hide unknown", 1, x, y, x + w, y + ROW_H); y += ROW_H;
     add(o, IK_CHECK, ID_FORMAT, "Format result", 1, x, y, x + w, y + ROW_H); y += ROW_H + 14;
     add(o, IK_HEAD, 0, "WINDOW", 1, x, y, x + w, y + 20); y += 28;
-    add(o, IK_CHECK, ID_TRAY, "Minimize to system tray", 1, x, y, x + w, y + ROW_H);
+    add(o, IK_CHECK, ID_MONITOR, "Monitor downloads", 1, x, y, x + w, y + ROW_H);
     break;
 
   case PG_DB:

@@ -9,18 +9,22 @@ extern "C" {
 
   typedef void (*TrayExitFn)(void* user);
 
-  /* Call once after the main window exists. exit_cb runs when the user picks Exit. */
-  void tray_init(TrayExitFn exit_cb, void* user);
+  typedef void (*TrayClickFn)(void* user);
+  typedef void (*TrayMonitorFn)(void* user, int enabled);
 
-  /* "Minimize to tray" setting */
+  void tray_set_persistent(HWND hwnd, int on);
+  void tray_set_monitor(int on);
+  int  tray_get_monitor(void);
+  void tray_set_callbacks(TrayClickFn click, void* click_user,
+    TrayMonitorFn monitor, void* monitor_user);
+
+  void tray_notify(HWND hwnd, const WCHAR* title, const WCHAR* text);
+  void tray_init(TrayExitFn exit_cb, void* user);
   void tray_set_enabled(int enabled);
   int  tray_get_enabled(void);
 
-  /* Call at the top of the main window subclass.
-     Returns 1 if the message was handled (use *result as the return value). */
   int  tray_handle_message(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, LRESULT* result);
 
-  /* Remove the icon (safe to call any time) */
   void tray_remove(void);
 
 #ifdef __cplusplus
