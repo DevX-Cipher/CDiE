@@ -616,6 +616,7 @@ void updater_init(Updater* u, void (*cb)(void*), void* user)
   u->notify = cb; u->user = user;
   snprintf(u->installed, sizeof(u->installed), "unknown");
 }
+
 void updater_check(Updater* u) { start(u, JOB_CHECK); }
 void updater_install(Updater* u) { start(u, JOB_INSTALL); }
 void updater_cancel(Updater* u) { u->cancel = 1; }

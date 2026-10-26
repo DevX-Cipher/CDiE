@@ -19,12 +19,12 @@
  * SOFTWARE.
  */
 
-/* gui_backend.c - drives the scan engine for the WinAPI GUI. It is the mirror
- * of main_console.c's scan path: same option defaults, same db resolution, same
- * die_engine_scan_file + die_engine_format_text, so the GUI prints exactly what `cdie` does.
- *
- * This translation unit deliberately does NOT include <windows.h>: it speaks to
- * the engine only. main_gui.c is the half that speaks Win32. */
+ /* gui_backend.c - drives the scan engine for the WinAPI GUI. It is the mirror
+	* of main_console.c's scan path: same option defaults, same db resolution, same
+	* die_engine_scan_file + die_engine_format_text, so the GUI prints exactly what `cdie` does.
+	*
+	* This translation unit deliberately does NOT include <windows.h>: it speaks to
+	* the engine only. main_gui.c is the half that speaks Win32. */
 
 #include "core/gui_backend.h"
 
@@ -44,308 +44,308 @@ static int g_bMainLoaded = 0;
 
 /* Mirrors main_console.c's resolve_database_path with no explicit path: use
  * "<exe-dir>/<name>" when it exists, else the bare relative name. */
-static char *gui_resolve_db(const char *pDefaultName)
+static char* gui_resolve_db(const char* pDefaultName)
 {
-    char *pAppDir = cdie_app_dir();
-    char *pCandidate = xx_fs_path_join(pAppDir, pDefaultName);
+	char* pAppDir = cdie_app_dir();
+	char* pCandidate = xx_fs_path_join(pAppDir, pDefaultName);
 
-    xx_rt_free(pAppDir);
+	xx_rt_free(pAppDir);
 
-    if (xx_fs_is_dir(pCandidate)) {
-        return pCandidate;
-    }
+	if (xx_fs_is_dir(pCandidate)) {
+		return pCandidate;
+	}
 
-    xx_rt_free(pCandidate);
+	xx_rt_free(pCandidate);
 
-    return cdie_strdup(pDefaultName);
+	return cdie_strdup(pDefaultName);
 }
 
 int gui_backend_init(void)
 {
-    if (g_bInited) {
-        return g_bMainLoaded;
-    }
+	if (g_bInited) {
+		return g_bMainLoaded;
+	}
 
-    scan_options_init(&g_options);
-    xx_rt_memset(&g_db, 0, sizeof(g_db));
+	scan_options_init(&g_options);
+	xx_rt_memset(&g_db, 0, sizeof(g_db));
 
-    /* GUI defaults follow the Detect It Easy GUI: deep + heuristic + verbose on.
-     * scan_options_init has already set show type/version/info, use extra/custom
-     * and sort - the settings that make the output match the console. */
-    g_options.bDeepScan = 1;
-    g_options.bHeuristicScan = 1;
-    g_options.bVerbose = 1;
+	/* GUI defaults follow the Detect It Easy GUI: deep + heuristic + verbose on.
+	 * scan_options_init has already set show type/version/info, use extra/custom
+	 * and sort - the settings that make the output match the console. */
+	g_options.bDeepScan = 1;
+	g_options.bHeuristicScan = 1;
+	g_options.bVerbose = 1;
 
-    g_options.pMainDatabasePath = gui_resolve_db("db");
-    g_options.pExtraDatabasePath = gui_resolve_db("db_extra");
-    g_options.pCustomDatabasePath = gui_resolve_db("db_custom");
+	g_options.pMainDatabasePath = gui_resolve_db("db");
+	g_options.pExtraDatabasePath = gui_resolve_db("db_extra");
+	g_options.pCustomDatabasePath = gui_resolve_db("db_custom");
 
-    /* Load all three once. The "Databases" toggles gate which of them run at
-     * scan time (via bUseExtraDatabase / bUseCustomDatabase), so a toggle needs
-     * no reload. A missing db_extra / db_custom directory simply loads nothing. */
-    g_bMainLoaded = db_load(&g_db, g_options.pMainDatabasePath, DB_MAIN);
-    db_load(&g_db, g_options.pExtraDatabasePath, DB_EXTRA);
-    db_load(&g_db, g_options.pCustomDatabasePath, DB_CUSTOM);
-    db_sort(&g_db);
+	/* Load all three once. The "Databases" toggles gate which of them run at
+	 * scan time (via bUseExtraDatabase / bUseCustomDatabase), so a toggle needs
+	 * no reload. A missing db_extra / db_custom directory simply loads nothing. */
+	g_bMainLoaded = db_load(&g_db, g_options.pMainDatabasePath, DB_MAIN);
+	db_load(&g_db, g_options.pExtraDatabasePath, DB_EXTRA);
+	db_load(&g_db, g_options.pCustomDatabasePath, DB_CUSTOM);
+	db_sort(&g_db);
 
-    g_bInited = 1;
+	g_bInited = 1;
 
-    return g_bMainLoaded;
+	return g_bMainLoaded;
 }
 
-const char *gui_backend_main_db_path(void)
+const char* gui_backend_main_db_path(void)
 {
-    return g_options.pMainDatabasePath ? g_options.pMainDatabasePath : "";
+	return g_options.pMainDatabasePath ? g_options.pMainDatabasePath : "";
 }
 
-const char *gui_backend_extra_db_path(void)
+const char* gui_backend_extra_db_path(void)
 {
-    return g_options.pExtraDatabasePath ? g_options.pExtraDatabasePath : "";
+	return g_options.pExtraDatabasePath ? g_options.pExtraDatabasePath : "";
 }
 
-const char *gui_backend_custom_db_path(void)
+const char* gui_backend_custom_db_path(void)
 {
-    return g_options.pCustomDatabasePath ? g_options.pCustomDatabasePath : "";
+	return g_options.pCustomDatabasePath ? g_options.pCustomDatabasePath : "";
 }
 
-int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *pCustom)
+int gui_backend_set_db_paths(const char* pMain, const char* pExtra, const char* pCustom)
 {
-    char *pNewMain;
-    char *pNewExtra;
-    char *pNewCustom;
-    DBase newDb;
+	char* pNewMain;
+	char* pNewExtra;
+	char* pNewCustom;
+	DBase newDb;
 
-    if (!g_bInited) {
-        return 0;
-    }
+	if (!g_bInited) {
+		return 0;
+	}
 
-    pNewMain = ((pMain != NULL) && (pMain[0] != 0)) ? cdie_strdup(pMain) : gui_resolve_db("db");
-    pNewExtra = ((pExtra != NULL) && (pExtra[0] != 0)) ? cdie_strdup(pExtra) : gui_resolve_db("db_extra");
-    pNewCustom = ((pCustom != NULL) && (pCustom[0] != 0)) ? cdie_strdup(pCustom) : gui_resolve_db("db_custom");
-    xx_rt_memset(&newDb, 0, sizeof(newDb));
+	pNewMain = ((pMain != NULL) && (pMain[0] != 0)) ? cdie_strdup(pMain) : gui_resolve_db("db");
+	pNewExtra = ((pExtra != NULL) && (pExtra[0] != 0)) ? cdie_strdup(pExtra) : gui_resolve_db("db_extra");
+	pNewCustom = ((pCustom != NULL) && (pCustom[0] != 0)) ? cdie_strdup(pCustom) : gui_resolve_db("db_custom");
+	xx_rt_memset(&newDb, 0, sizeof(newDb));
 
-    if (!pNewMain || !pNewExtra || !pNewCustom || !db_load(&newDb, pNewMain, DB_MAIN)) {
-        db_free(&newDb);
-        xx_rt_free(pNewMain);
-        xx_rt_free(pNewExtra);
-        xx_rt_free(pNewCustom);
-        return 0;
-    }
+	if (!pNewMain || !pNewExtra || !pNewCustom || !db_load(&newDb, pNewMain, DB_MAIN)) {
+		db_free(&newDb);
+		xx_rt_free(pNewMain);
+		xx_rt_free(pNewExtra);
+		xx_rt_free(pNewCustom);
+		return 0;
+	}
 
-    db_load(&newDb, pNewExtra, DB_EXTRA);
-    db_load(&newDb, pNewCustom, DB_CUSTOM);
-    db_sort(&newDb);
-    db_free(&g_db);
-    xx_rt_free(g_options.pMainDatabasePath);
-    xx_rt_free(g_options.pExtraDatabasePath);
-    xx_rt_free(g_options.pCustomDatabasePath);
-    g_db = newDb;
-    g_options.pMainDatabasePath = pNewMain;
-    g_options.pExtraDatabasePath = pNewExtra;
-    g_options.pCustomDatabasePath = pNewCustom;
-    g_bMainLoaded = 1;
-    return 1;
+	db_load(&newDb, pNewExtra, DB_EXTRA);
+	db_load(&newDb, pNewCustom, DB_CUSTOM);
+	db_sort(&newDb);
+	db_free(&g_db);
+	xx_rt_free(g_options.pMainDatabasePath);
+	xx_rt_free(g_options.pExtraDatabasePath);
+	xx_rt_free(g_options.pCustomDatabasePath);
+	g_db = newDb;
+	g_options.pMainDatabasePath = pNewMain;
+	g_options.pExtraDatabasePath = pNewExtra;
+	g_options.pCustomDatabasePath = pNewCustom;
+	g_bMainLoaded = 1;
+	return 1;
 }
 
 int gui_backend_signature_count(void)
 {
-    return g_db.nCount;
+	return g_db.nCount;
 }
 
 const char* gui_backend_signature_name(int index)
 {
-  (void)index;
-  /* TODO: return the index-th signature name/label from the loaded database */
-  return NULL;
+	(void)index;
+	/* TODO: return the index-th signature name/label from the loaded database */
+	return NULL;
 }
 
-const char *gui_backend_app_title(void)
+const char* gui_backend_app_title(void)
 {
-    return X_APPLICATIONDISPLAYNAME " " X_APPLICATIONVERSION;
+	return X_APPLICATIONDISPLAYNAME " " X_APPLICATIONVERSION;
 }
 
 void gui_backend_set_flags(int bDeep, int bHeuristic, int bVerbose, int bAggressive, int bHideUnknown, int bFormat)
 {
-    g_options.bDeepScan = bDeep ? 1 : 0;
-    g_options.bHeuristicScan = bHeuristic ? 1 : 0;
-    g_options.bVerbose = bVerbose ? 1 : 0;
-    g_options.bAggressiveScan = bAggressive ? 1 : 0;
-    g_options.bHideUnknown = bHideUnknown ? 1 : 0;
-    g_options.bFormatResult = bFormat ? 1 : 0;
+	g_options.bDeepScan = bDeep ? 1 : 0;
+	g_options.bHeuristicScan = bHeuristic ? 1 : 0;
+	g_options.bVerbose = bVerbose ? 1 : 0;
+	g_options.bAggressiveScan = bAggressive ? 1 : 0;
+	g_options.bHideUnknown = bHideUnknown ? 1 : 0;
+	g_options.bFormatResult = bFormat ? 1 : 0;
 }
 
 void gui_backend_set_databases(int bUseExtra, int bUseCustom)
 {
-    g_options.bUseExtraDatabase = bUseExtra ? 1 : 0;
-    g_options.bUseCustomDatabase = bUseCustom ? 1 : 0;
+	g_options.bUseExtraDatabase = bUseExtra ? 1 : 0;
+	g_options.bUseCustomDatabase = bUseCustom ? 1 : 0;
 }
 
-int gui_backend_get_optimization_options(gui_backend_optimization_options *pOptions)
+int gui_backend_get_optimization_options(gui_backend_optimization_options* pOptions)
 {
-    if (!pOptions) return 0;
-    pOptions->buffer_size = xx_get_buffer_size();
-    pOptions->file_buffer_size = xx_get_file_buffer_size();
-    pOptions->use_sse2 = xx_is_sse2_enabled() ? 1 : 0;
-    pOptions->use_avx2 = xx_is_avx2_enabled() ? 1 : 0;
-    return 1;
+	if (!pOptions) return 0;
+	pOptions->buffer_size = xx_get_buffer_size();
+	pOptions->file_buffer_size = xx_get_file_buffer_size();
+	pOptions->use_sse2 = xx_is_sse2_enabled() ? 1 : 0;
+	pOptions->use_avx2 = xx_is_avx2_enabled() ? 1 : 0;
+	return 1;
 }
 
-int gui_backend_get_optimization_capabilities(gui_backend_optimization_capabilities *pCapabilities)
+int gui_backend_get_optimization_capabilities(gui_backend_optimization_capabilities* pCapabilities)
 {
-    if (!pCapabilities) return 0;
-    pCapabilities->sse2 = xx_has_sse2() ? 1 : 0;
-    pCapabilities->avx2 = xx_has_avx2() ? 1 : 0;
-    return 1;
+	if (!pCapabilities) return 0;
+	pCapabilities->sse2 = xx_has_sse2() ? 1 : 0;
+	pCapabilities->avx2 = xx_has_avx2() ? 1 : 0;
+	return 1;
 }
 
-int gui_backend_set_optimization_options(const gui_backend_optimization_options *pOptions)
+int gui_backend_set_optimization_options(const gui_backend_optimization_options* pOptions)
 {
-    gui_backend_optimization_options options;
-    if (!pOptions) return 0;
-    options = *pOptions;
-    if ((options.use_sse2 != 0 && options.use_sse2 != 1) ||
-        (options.use_avx2 != 0 && options.use_avx2 != 1)) return 0;
-    xx_set_buffer_size(options.buffer_size);
-    xx_set_file_buffer_size(options.file_buffer_size);
-    xx_set_sse2_enabled(options.use_sse2 != 0);
-    xx_set_avx2_enabled(options.use_avx2 != 0);
-    return 1;
+	gui_backend_optimization_options options;
+	if (!pOptions) return 0;
+	options = *pOptions;
+	if ((options.use_sse2 != 0 && options.use_sse2 != 1) ||
+		(options.use_avx2 != 0 && options.use_avx2 != 1)) return 0;
+	xx_set_buffer_size(options.buffer_size);
+	xx_set_file_buffer_size(options.file_buffer_size);
+	xx_set_sse2_enabled(options.use_sse2 != 0);
+	xx_set_avx2_enabled(options.use_avx2 != 0);
+	return 1;
 }
 
 typedef struct gui_file_types_context {
-    gui_backend_file_type_fn pTypeFn;
-    void *pUserData;
-    int bStarted;
+	gui_backend_file_type_fn pTypeFn;
+	void* pUserData;
+	int bStarted;
 } gui_file_types_context;
 
 /* Broad database categories do not identify separate concrete format readers. */
 static int gui_concrete_file_type(XFileType type)
 {
-    return type != XFT_UNKNOWN && type != XFT_PE && type != XFT_ELF &&
-        type != XFT_MACHO && type != XFT_ARCHIVE && type != XFT_IMAGE &&
-        type != XFT_CLI_ASSEMBLY;
+	return type != XFT_UNKNOWN && type != XFT_PE && type != XFT_ELF &&
+		type != XFT_MACHO && type != XFT_ARCHIVE && type != XFT_IMAGE &&
+		type != XFT_CLI_ASSEMBLY;
 }
 
-static void gui_emit_file_type(XFileType type, void *pUserData)
+static void gui_emit_file_type(XFileType type, void* pUserData)
 {
-    gui_file_types_context *pContext = (gui_file_types_context *)pUserData;
-    if (!pContext->bStarted) {
-        pContext->pTypeFn(0, "Automatic", pContext->pUserData);
-        pContext->bStarted = 1;
-    }
-    if (gui_concrete_file_type(type))
-        pContext->pTypeFn((int)type, xft_to_string(type), pContext->pUserData);
+	gui_file_types_context* pContext = (gui_file_types_context*)pUserData;
+	if (!pContext->bStarted) {
+		pContext->pTypeFn(0, "Automatic", pContext->pUserData);
+		pContext->bStarted = 1;
+	}
+	if (gui_concrete_file_type(type))
+		pContext->pTypeFn((int)type, xft_to_string(type), pContext->pUserData);
 }
 
-int gui_backend_file_types(const char *pUtf8Path, gui_backend_file_type_fn pTypeFn, void *pUserData)
+int gui_backend_file_types(const char* pUtf8Path, gui_backend_file_type_fn pTypeFn, void* pUserData)
 {
-    gui_file_types_context context;
-    if (!g_bInited) return 0;
-    context.pTypeFn = pTypeFn;
-    context.pUserData = pUserData;
-    context.bStarted = 0;
-    return die_engine_detect_file_types(pUtf8Path, pTypeFn ? gui_emit_file_type : NULL, &context);
+	gui_file_types_context context;
+	if (!g_bInited) return 0;
+	context.pTypeFn = pTypeFn;
+	context.pUserData = pUserData;
+	context.bStarted = 0;
+	return die_engine_detect_file_types(pUtf8Path, pTypeFn ? gui_emit_file_type : NULL, &context);
 }
 
-int gui_backend_scan(const char *pUtf8Path, char **ppResultText, char **ppTypeName)
+int gui_backend_scan(const char* pUtf8Path, char** ppResultText, char** ppTypeName)
 {
-    return gui_backend_scan_results(pUtf8Path, NULL, NULL, ppResultText, ppTypeName);
+	return gui_backend_scan_results(pUtf8Path, NULL, NULL, ppResultText, ppTypeName);
 }
 
-int gui_backend_scan_results(const char *pUtf8Path, gui_backend_result_fn pResultFn,
-    void *pUserData, char **ppResultText, char **ppTypeName)
+int gui_backend_scan_results(const char* pUtf8Path, gui_backend_result_fn pResultFn,
+	void* pUserData, char** ppResultText, char** ppTypeName)
 {
-    return gui_backend_scan_results_type(pUtf8Path, 0, pResultFn, pUserData, ppResultText, ppTypeName);
+	return gui_backend_scan_results_type(pUtf8Path, 0, pResultFn, pUserData, ppResultText, ppTypeName);
 }
 
-int gui_backend_scan_results_type(const char *pUtf8Path, int nTypeId,
-    gui_backend_result_fn pResultFn, void *pUserData, char **ppResultText, char **ppTypeName)
+int gui_backend_scan_results_type(const char* pUtf8Path, int nTypeId,
+	gui_backend_result_fn pResultFn, void* pUserData, char** ppResultText, char** ppTypeName)
 {
-    ScanResult result;
-    char *pText = NULL;
-    char *pTypeName = NULL;
-    int i;
+	ScanResult result;
+	char* pText = NULL;
+	char* pTypeName = NULL;
+	int i;
 
-    if (ppResultText != NULL) {
-        *ppResultText = NULL;
-    }
+	if (ppResultText != NULL) {
+		*ppResultText = NULL;
+	}
 
-    if (ppTypeName != NULL) {
-        *ppTypeName = NULL;
-    }
+	if (ppTypeName != NULL) {
+		*ppTypeName = NULL;
+	}
 
-    if ((!g_bInited) || (pUtf8Path == NULL) || (pUtf8Path[0] == 0) ||
-        nTypeId < 0 || nTypeId >= XFT_COUNT ||
-        (nTypeId != 0 && !gui_concrete_file_type((XFileType)nTypeId))) {
-        return 0;
-    }
+	if ((!g_bInited) || (pUtf8Path == NULL) || (pUtf8Path[0] == 0) ||
+		nTypeId < 0 || nTypeId >= XFT_COUNT ||
+		(nTypeId != 0 && !gui_concrete_file_type((XFileType)nTypeId))) {
+		return 0;
+	}
 
-    if (!die_engine_scan_file_type(pUtf8Path, &g_db, &g_options, (XFileType)nTypeId, &result)) {
-        scan_result_free(&result);
-        return 0;
-    }
+	if (!die_engine_scan_file_type(pUtf8Path, &g_db, &g_options, (XFileType)nTypeId, &result)) {
+		scan_result_free(&result);
+		return 0;
+	}
 
-    if (ppResultText != NULL) {
-        pText = die_engine_format_text(&result, &g_options);
-    }
+	if (ppResultText != NULL) {
+		pText = die_engine_format_text(&result, &g_options);
+	}
 
-    if (ppTypeName != NULL) {
-        pTypeName = cdie_strdup(xft_to_string(result.fileType));
-    }
-    if ((ppResultText && !pText) || (ppTypeName && !pTypeName)) {
-        xx_rt_free(pText);
-        xx_rt_free(pTypeName);
-        scan_result_free(&result);
-        return 0;
-    }
+	if (ppTypeName != NULL) {
+		pTypeName = cdie_strdup(xft_to_string(result.fileType));
+	}
+	if ((ppResultText && !pText) || (ppTypeName && !pTypeName)) {
+		xx_rt_free(pText);
+		xx_rt_free(pTypeName);
+		scan_result_free(&result);
+		return 0;
+	}
 
-    for (i = 0; pResultFn && i < result.nCount; ++i) {
-        ScanRecord *pRecord = &result.pRecords[i];
-        char *pType;
-        char *pDisplayType;
-        const char *pMarker;
-        size_t nMarkerLength;
-        size_t nLength;
-        if (pRecord->bIsUnknown && g_options.bHideUnknown) continue;
-        pType = die_engine_translate_type(pRecord->pType ? pRecord->pType : "");
-        pMarker = pRecord->bIsHeuristic ? "(Heur) " : pRecord->bIsAHeuristic ? "(A-Heur) " : "";
-        if (!pType) goto scan_allocation_failed;
-        nMarkerLength = xx_rt_strlen(pMarker);
-        nLength = nMarkerLength + xx_rt_strlen(pType) + 1;
-        pDisplayType = (char *)xx_rt_malloc(nLength);
-        if (!pDisplayType) { xx_rt_free(pType); goto scan_allocation_failed; }
-        xx_rt_memcpy(pDisplayType, pMarker, nMarkerLength);
-        xx_rt_memcpy(pDisplayType + nMarkerLength, pType, nLength - nMarkerLength);
-        pResultFn(pDisplayType, pRecord->pName ? pRecord->pName : "",
-            pRecord->pVersion ? pRecord->pVersion : "", pRecord->pInfo ? pRecord->pInfo : "", pUserData);
-        xx_rt_free(pDisplayType);
-        xx_rt_free(pType);
-    }
+	for (i = 0; pResultFn && i < result.nCount; ++i) {
+		ScanRecord* pRecord = &result.pRecords[i];
+		char* pType;
+		char* pDisplayType;
+		const char* pMarker;
+		size_t nMarkerLength;
+		size_t nLength;
+		if (pRecord->bIsUnknown && g_options.bHideUnknown) continue;
+		pType = die_engine_translate_type(pRecord->pType ? pRecord->pType : "");
+		pMarker = pRecord->bIsHeuristic ? "(Heur) " : pRecord->bIsAHeuristic ? "(A-Heur) " : "";
+		if (!pType) goto scan_allocation_failed;
+		nMarkerLength = xx_rt_strlen(pMarker);
+		nLength = nMarkerLength + xx_rt_strlen(pType) + 1;
+		pDisplayType = (char*)xx_rt_malloc(nLength);
+		if (!pDisplayType) { xx_rt_free(pType); goto scan_allocation_failed; }
+		xx_rt_memcpy(pDisplayType, pMarker, nMarkerLength);
+		xx_rt_memcpy(pDisplayType + nMarkerLength, pType, nLength - nMarkerLength);
+		pResultFn(pDisplayType, pRecord->pName ? pRecord->pName : "",
+			pRecord->pVersion ? pRecord->pVersion : "", pRecord->pInfo ? pRecord->pInfo : "", pUserData);
+		xx_rt_free(pDisplayType);
+		xx_rt_free(pType);
+	}
 
-    if (ppResultText) *ppResultText = pText;
-    if (ppTypeName) *ppTypeName = pTypeName;
-    scan_result_free(&result);
-    return 1;
+	if (ppResultText) *ppResultText = pText;
+	if (ppTypeName) *ppTypeName = pTypeName;
+	scan_result_free(&result);
+	return 1;
 
 scan_allocation_failed:
-    xx_rt_free(pText);
-    xx_rt_free(pTypeName);
-    scan_result_free(&result);
-    return 0;
+	xx_rt_free(pText);
+	xx_rt_free(pTypeName);
+	scan_result_free(&result);
+	return 0;
 }
 
-void gui_backend_free(void *pPtr)
+void gui_backend_free(void* pPtr)
 {
-    xx_rt_free(pPtr);
+	xx_rt_free(pPtr);
 }
 
 void gui_backend_shutdown(void)
 {
-    if (g_bInited) {
-        db_free(&g_db);
-        scan_options_free(&g_options);
-        xx_rt_memset(&g_db, 0, sizeof(g_db));
-        g_bInited = 0;
-        g_bMainLoaded = 0;
-    }
+	if (g_bInited) {
+		db_free(&g_db);
+		scan_options_free(&g_options);
+		xx_rt_memset(&g_db, 0, sizeof(g_db));
+		g_bInited = 0;
+		g_bMainLoaded = 0;
+	}
 }
