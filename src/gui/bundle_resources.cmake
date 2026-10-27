@@ -3,6 +3,10 @@ if(IS_DIRECTORY "${CDIE_SOURCE_DIR}/translations")
     file(COPY "${CDIE_SOURCE_DIR}/translations" DESTINATION "${RESOURCES_DIR}"
         FILES_MATCHING PATTERN "*.po")
 endif()
+# Detection descriptions for the result tree's "?" button.
+if(INFO_DIR AND NOT INFO_DIR STREQUAL "NONE" AND IS_DIRECTORY "${INFO_DIR}/html")
+    file(COPY "${INFO_DIR}/html" DESTINATION "${RESOURCES_DIR}/info" FILES_MATCHING PATTERN "*.html")
+endif()
 if(TRANSLATIONS_ONLY)
     return()
 endif()

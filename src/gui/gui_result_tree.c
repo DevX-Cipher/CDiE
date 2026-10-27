@@ -29,6 +29,7 @@ static int emit_record(const xx_scan_record *record, size_t parent, gui_backend_
     xx_buf_t text;
     char *type = xx_scan_translate_type(record->type ? record->type : "");
     char *label;
+    gui_backend_detection detection;
     int ok;
     if (!type) return 0;
     xx_buf_init(&text);
@@ -40,7 +41,9 @@ static int emit_record(const xx_scan_record *record, size_t parent, gui_backend_
     if (record->version && record->version[0]) xx_buf_appendf(&text, " (%s)", record->version);
     if (record->info && record->info[0]) xx_buf_appendf(&text, " [%s]", record->info);
     label = xx_buf_detach(&text, NULL);
-    ok = label && callback(parent, label, type, user);
+    detection.name = record->name ? record->name : "Unknown";
+    detection.signature = record->signature;
+    ok = label && callback(parent, label, type, &detection, user);
     xx_rt_free(label); xx_rt_free(type);
     return ok;
 }
@@ -54,7 +57,7 @@ int gui_result_tree_emit(const xx_scan_result *result, int hide_unknown, gui_bac
     if (!result || result->nCount < 0 || (!result->pRecords && result->nCount) || !callback) return 0;
     groups = xx_rt_calloc((size_t)result->nCount + 1, sizeof(*groups));
     if (!groups) return 0;
-    if (!callback(SIZE_MAX, xft_to_string(result->fileType), "", user)) goto done;
+    if (!callback(SIZE_MAX, xft_to_string(result->fileType), "", NULL, user)) goto done;
     for (i = 0; i < (size_t)result->nCount; ++i) {
         const xx_scan_record *record = &result->pRecords[i];
         if (!record->parent_id && record->scan_part == XX_SCAN_PART_INPUT) {
@@ -107,7 +110,7 @@ int gui_result_tree_emit(const xx_scan_result *result, int hide_unknown, gui_bac
                 }
                 label = xx_buf_detach(&text, NULL);
                 if (!label) { ok = 0; goto done; }
-                ok = callback(parent, label, "", user);
+                ok = callback(parent, label, "", NULL, user);
                 xx_rt_free(label);
                 if (!ok) goto done;
                 groups[i].node = next_node++;

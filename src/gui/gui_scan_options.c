@@ -4,57 +4,6 @@
 #include "app/cdie_translation.h"
 #include <xxfclib/rt/xx_rt.h>
 
-xxwidgets_status gui_scan_modes_dialog(xxwidgets_widget *owner, unsigned int *modes, int *accepted)
-{
-    xxwidgets_option controls[] = {
-        {CDIE_TR("All file types"), 0}, {CDIE_TR("Scan overlays"), 0},
-        {CDIE_TR("Scan resources"), 0}, {CDIE_TR("Scan archive members (one level)"), 0}
-    };
-    size_t i;
-    xxwidgets_status status;
-    if (accepted) *accepted = 0;
-    if (!modes || !accepted || (*modes & ~GUI_SCAN_MODES_MASK)) return XXWIDGETS_INVALID_ARGUMENT;
-    for (i = 0; i < 4; ++i) controls[i].value = (int)((*modes >> i) & 1u);
-    status = xxwidgets_options_dialog(owner, CDIE_TR("cdie Scan modes"), controls, 4, accepted);
-    if (status == XXWIDGETS_OK && *accepted) {
-        *modes = 0;
-        for (i = 0; i < 4; ++i) if (controls[i].value) *modes |= 1u << i;
-    }
-    return status;
-}
-
-xxwidgets_status gui_scan_options_dialog(xxwidgets_widget *owner, const char *title,
-    xxwidgets_scan_options *options, unsigned int *modes, int *accepted)
-{
-    xxwidgets_option controls[] = {
-        {CDIE_TR("Deep scan"), 0}, {CDIE_TR("Heuristic scan"), 0}, {CDIE_TR("Verbose results"), 0},
-        {CDIE_TR("Aggressive scan"), 0}, {CDIE_TR("Hide unknown results"), 0}, {CDIE_TR("Format text report"), 0},
-        {CDIE_TR("Extra database"), 0}, {CDIE_TR("Custom database"), 0},
-        {CDIE_TR("All file types"), 0}, {CDIE_TR("Scan overlays"), 0},
-        {CDIE_TR("Scan resources"), 0}, {CDIE_TR("Scan archive members (one level)"), 0}
-    };
-    size_t i;
-    xxwidgets_status status;
-    if (accepted) *accepted = 0;
-    if (!options || !modes || !accepted || (options->flags & ~63u) ||
-        (options->databases & ~3u) || (*modes & ~GUI_SCAN_MODES_MASK))
-        return XXWIDGETS_INVALID_ARGUMENT;
-    for (i = 0; i < 12; ++i) {
-        unsigned int bits = i < 6 ? options->flags : i < 8 ? options->databases : *modes;
-        controls[i].value = (int)((bits >> (i < 6 ? i : i < 8 ? i - 6 : i - 8)) & 1u);
-    }
-    status = xxwidgets_options_dialog(owner, title, controls, 12, accepted);
-    if (status == XXWIDGETS_OK && *accepted) {
-        options->flags = options->databases = *modes = 0;
-        for (i = 0; i < 12; ++i) if (controls[i].value) {
-            if (i < 6) options->flags |= 1u << i;
-            else if (i < 8) options->databases |= 1u << (i - 6);
-            else *modes |= 1u << (i - 8);
-        }
-    }
-    return status;
-}
-
 typedef struct scan_page {
     xxwidgets_scan_options_widget *form;
     xxwidgets_widget *modes_label, *modes[4];

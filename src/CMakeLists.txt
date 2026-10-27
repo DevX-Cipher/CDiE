@@ -72,6 +72,30 @@ if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
         endfunction()
         cdie_add_widgets()
     endif()
+    # Persistent Options: the xxfclib settings store. Its runtime (xx_rt,
+    # memory, strings) already comes with die_engine.
+    set(_cdie_settings_src "${xxfclib_SOURCE_DIR}/src")
+    add_library(cdie_settings STATIC
+        "${_cdie_settings_src}/settings/xx_settings.c"
+        "${_cdie_settings_src}/settings/xx_settings_ini.c"
+        "${_cdie_settings_src}/settings/xx_settings_value.c"
+        "${_cdie_settings_src}/global/xx_settings_global.c")
+    if(WIN32)
+        target_sources(cdie_settings PRIVATE
+            "${_cdie_settings_src}/settings/platforms/xx_settings_file_windows.c"
+            "${_cdie_settings_src}/settings/platforms/xx_settings_windows.c")
+    else()
+        target_sources(cdie_settings PRIVATE "${_cdie_settings_src}/settings/platforms/xx_settings_file_posix.c")
+        target_compile_definitions(cdie_settings PRIVATE _POSIX_C_SOURCE=200809L)
+        if(APPLE)
+            target_sources(cdie_settings PRIVATE "${_cdie_settings_src}/settings/platforms/xx_settings_macos.c")
+            target_compile_definitions(cdie_settings PRIVATE _DARWIN_C_SOURCE)
+            target_link_libraries(cdie_settings PRIVATE "-framework CoreFoundation")
+        else()
+            target_sources(cdie_settings PRIVATE "${_cdie_settings_src}/settings/platforms/xx_settings_posix.c")
+        endif()
+    endif()
+    target_link_libraries(cdie_settings PUBLIC xxfclib::die_engine)
     add_library(cdie_ui_translation STATIC app/cdie_translation.c)
     target_link_libraries(cdie_ui_translation PUBLIC xxwidgets::xxwidgets)
     target_include_directories(cdie_ui_translation PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
@@ -80,7 +104,7 @@ if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
     endif()
     if(MSVC AND CDIE_NO_CRT AND NOT BUILD_SHARED_LIBS)
         # Every embedded widget object must match the hosted frontend's CRT.
-        foreach(_widget_target cdie_ui_translation xxwidgets xxwidgets_io xxwidgets_history xxwidgets_translation
+        foreach(_widget_target cdie_ui_translation cdie_settings xxwidgets xxwidgets_io xxwidgets_history xxwidgets_translation
                 xxwidgets_threads xxwidgets_codepages xxwidgets_scan_colors)
             if(TARGET ${_widget_target})
                 set_property(TARGET ${_widget_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
@@ -98,6 +122,7 @@ function(cdie_stage_frontend_resources target)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}"
             "-DDATABASE_DIR=${CDIE_DATABASE_DIR}"
+            "-DINFO_DIR=${CDIE_INFO_DIR}"
             "-DRESOURCES_DIR=$<TARGET_FILE_DIR:${target}>"
             "-DCDIE_SOURCE_DIR=${_CDIE_SOURCE_DIR}"
             "-DCDISASM_DIR=${XXFC_CDISASM_DIR}"
@@ -113,6 +138,7 @@ function(cdie_stage_frontend_translations target)
         COMMAND "${CMAKE_COMMAND}"
             "-DRESOURCES_DIR=$<TARGET_FILE_DIR:${target}>"
             "-DCDIE_SOURCE_DIR=${_CDIE_SOURCE_DIR}"
+            "-DINFO_DIR=${CDIE_INFO_DIR}"
             -DTRANSLATIONS_ONLY=ON -P "${_CDIE_RESOURCES_SCRIPT}"
         VERBATIM)
 endfunction()

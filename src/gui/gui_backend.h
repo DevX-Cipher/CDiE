@@ -61,6 +61,9 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
  * loaded ones, so applying them needs no reload. */
 int gui_backend_db_paths_current(const char *pMain, const char *pExtra, const char *pCustom);
 
+/* 1 when database nIndex (0 main, 1 extra, 2 custom) is the default folder. */
+int gui_backend_db_path_is_default(int nIndex);
+
 /* Total number of signatures loaded across the three databases. */
 int gui_backend_signature_count(void);
 
@@ -173,9 +176,31 @@ int gui_backend_scan_results_type(const char *pUtf8Path, int nTypeId,
  * Return zero from the callback to abort on an allocation/display failure.
  * progress (may be NULL) receives the engine's levels; stopping it cancels the
  * scan, which then fails with progress->is_stop set. */
-typedef int (*gui_backend_tree_fn)(size_t parent, const char *text, const char *category, void *user);
+typedef struct gui_backend_detection {
+    const char *name;      /* what was found, e.g. "UPX"; never NULL */
+    const char *signature; /* database path of the script that found it; NULL for Unknown */
+} gui_backend_detection;
+/* detection is NULL on group rows (the file type, Overlay, Archive member...)
+ * and is borrowed for the call. */
+typedef int (*gui_backend_tree_fn)(size_t parent, const char *text, const char *category,
+                                   const gui_backend_detection *detection, void *user);
 int gui_backend_scan_tree(const char *path, int type_id, gui_backend_tree_fn callback,
     void *user, char **report, char **type_name, xx_pd_struct *progress);
+
+/* Source of the loaded signature a result row names (its database path),
+ * NULL when no loaded signature has that path or it is compiled bytecode.
+ * Free with gui_backend_free. */
+char *gui_backend_signature_source(const char *signature);
+/* Runs source, an edited copy of that signature, on path the way a scan of
+ * type_id runs it, with the loaded _init and include helpers but no other
+ * signature. *text receives what it detected followed by its _log output and
+ * errors (free with gui_backend_free). Returns 0 when the file cannot be
+ * scanned; *text then says why when it can. */
+int gui_backend_run_signature(const char *path, int type_id, const char *signature, const char *source, char **text);
+/* The bundled description of a detection name (info/html/<name>.html beside
+ * the databases), as plain text; NULL when there is none. Free with
+ * gui_backend_free. */
+char *gui_backend_info_text(const char *name);
 
 /* Frees a string handed back by gui_backend_scan (uses the engine allocator,
  * which on the CRT-free build is not the Win32 heap the frontend uses). */

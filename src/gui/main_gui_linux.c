@@ -3,12 +3,13 @@
 #include "../gui/gui_backend.h"
 #include "../gui/gui_tree.h"
 #include "../gui/gui_scan_options.h"
+#include "../gui/gui_options.h"
+#include "../gui/gui_about.h"
+#include "../gui/gui_settings.h"
 #include "global.h"
 #include <xxwidgets/xxwidgets.h>
 #include <xxwidgets/xxwidgets_combobox.h>
 #include <xxwidgets/xxwidgets_scan_panel.h>
-#include <xxwidgets/xxwidgets_database_paths.h>
-#include <xxwidgets/xxwidgets_font_options.h>
 #include <xxfclib/strings/xx_string.h>
 #include <limits.h>
 #include <stdio.h>
@@ -40,12 +41,14 @@
 #include <gtk/gtk.h>
 
 enum { ACTION_NONE, ACTION_SCAN, ACTION_REPORT, ACTION_QUIT, ACTION_OPTIONS, ACTION_BROWSE,
-    ACTION_DATABASE_PATHS, ACTION_FONTS, ACTION_TOOL_BASE = 100 };
+    ACTION_DATABASE_PATHS, ACTION_FONTS, ACTION_ABOUT, ACTION_TOOL_BASE = 100 };
 typedef struct tui_app {
     xxwidgets_app *app;
-    xxwidgets_widget *window, *path, *status, *browse, *options, *database_paths, *fonts, *tools[11];
+    xxwidgets_widget *window, *path, *status, *browse, *options, *about, *tools[11];
     xxwidgets_scan_panel *panel;
     char *type_path;
+    gui_options_page_id options_page;
+    xx_settings *settings;
     int running, pending, busy, needs_layout;
 } tui_app;
 typedef struct file_type { int id; wchar_t *label; } file_type;
@@ -226,8 +229,7 @@ static void layout(tui_app *ui)
         (void)xxwidgets_widget_set_rect(ui->tools[i], (xxwidgets_rect){x, h - 11 + row * 3, end - x - 1, 2});
     }
     (void)xxwidgets_widget_set_rect(ui->options, (xxwidgets_rect){2 + 5 * (w - 4) / 6, h - 8, (w - 4) / 6 - 1, 2});
-    (void)xxwidgets_widget_set_rect(ui->database_paths, (xxwidgets_rect){2, h - 5, 22, 2});
-    (void)xxwidgets_widget_set_rect(ui->fonts, (xxwidgets_rect){26, h - 5, 16, 2});
+    (void)xxwidgets_widget_set_rect(ui->about, (xxwidgets_rect){2, h - 5, 16, 2});
     (void)xxwidgets_widget_set_rect(ui->status, (xxwidgets_rect){2, h - 1, w - 4, 1});
 }
 static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *user)
@@ -245,11 +247,12 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         (void)xxwidgets_scan_panel_clear(ui->panel);
         (void)xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE)) ui->pending = ACTION_SCAN;
-    else if (event->type == XXWIDGETS_EVENT_CLICK) {
+    else if (gui_tree_mark_event(ui->panel, event)) {
+        /* S or ? on a result row: shown after polling returns. */
+    } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == ui->browse) ui->pending = ACTION_BROWSE;
         else if (event->widget == ui->options) ui->pending = ACTION_OPTIONS;
-        else if (event->widget == ui->database_paths) ui->pending = ACTION_DATABASE_PATHS;
-        else if (event->widget == ui->fonts) ui->pending = ACTION_FONTS;
+        else if (event->widget == ui->about) ui->pending = ACTION_ABOUT;
         else if (event->widget == control(ui, XXWIDGETS_SCAN_PANEL_SCAN)) ui->pending = ACTION_SCAN;
         else if (event->widget == control(ui, XXWIDGETS_SCAN_PANEL_REPORT)) ui->pending = ACTION_REPORT;
         else for (int i = 0; i < 11; ++i) if (event->widget == ui->tools[i]) ui->pending = ACTION_TOOL_BASE + i;
@@ -257,14 +260,13 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
 }
 static int create_controls(tui_app *ui, const char *path)
 {
-    static const xxwidgets_shortcut shortcuts[] = {{"F5", ACTION_SCAN}, {"Ctrl+R", ACTION_REPORT}, {"Ctrl+Q", ACTION_QUIT}, {"Ctrl+O", ACTION_BROWSE}, {"F2", ACTION_OPTIONS}, {"F3", ACTION_DATABASE_PATHS}, {"F4", ACTION_FONTS}, {"Ctrl+Shift+Y", ACTION_TOOL_BASE + 10}};
+    static const xxwidgets_shortcut shortcuts[] = {{"F5", ACTION_SCAN}, {"Ctrl+R", ACTION_REPORT}, {"Ctrl+Q", ACTION_QUIT}, {"Ctrl+O", ACTION_BROWSE}, {"F1", ACTION_ABOUT}, {"F2", ACTION_OPTIONS}, {"F3", ACTION_DATABASE_PATHS}, {"F4", ACTION_FONTS}, {"Ctrl+Shift+Y", ACTION_TOOL_BASE + 10}};
     if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW, gui_backend_app_title(), (xxwidgets_rect){4, 3, 132, 34}, &ui->window) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_EDIT, path ? path : "", (xxwidgets_rect){2, 1, 114, 2}, &ui->path) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Browse"), (xxwidgets_rect){118, 1, 12, 2}, &ui->browse) != XXWIDGETS_OK ||
         xxwidgets_scan_panel_create(ui->window, (xxwidgets_rect){2, 4, 128, 21}, &ui->panel) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Scan options"), (xxwidgets_rect){2, 26, 18, 2}, &ui->options) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Database paths"), (xxwidgets_rect){2, 29, 22, 2}, &ui->database_paths) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Fonts"), (xxwidgets_rect){26, 29, 16, 2}, &ui->fonts) != XXWIDGETS_OK ||
+        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Options"), (xxwidgets_rect){2, 26, 18, 2}, &ui->options) != XXWIDGETS_OK ||
+        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("About"), (xxwidgets_rect){2, 29, 16, 2}, &ui->about) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, "", (xxwidgets_rect){2, 33, 128, 1}, &ui->status) != XXWIDGETS_OK) return 0;
     for (int i = 0; i < 11; ++i)
         if (xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR(tool_names[i]), (xxwidgets_rect){2, 26, 18, 2}, &ui->tools[i]) != XXWIDGETS_OK) return 0;
@@ -278,7 +280,7 @@ static int create_controls(tui_app *ui, const char *path)
         xxwidgets_window_set_accept_file_drops(ui->window, 1) != XXWIDGETS_OK) return 0;
     layout(ui); (void)xxwidgets_widget_focus(ui->path);
     set_status(ui, gui_backend_signature_count() ? CDIE_TR("Choose a file, drop one here, or enter its path.") :
-        CDIE_TR("No signatures loaded. Choose the main folder using Database paths (F3).")); return 1;
+        CDIE_TR("No signatures loaded. Choose the main folder in Options > Signatures (F3).")); return 1;
 }
 static xxwidgets_status browse_database(xxwidgets_widget *owner, const char *initial, char **path, int *accepted, void *user)
 {
@@ -307,40 +309,77 @@ static xxwidgets_status browse_database(xxwidgets_widget *owner, const char *ini
     gtk_widget_destroy(dialog);
     return status;
 }
-static int apply_databases(const char *const paths[3], char *error, size_t capacity, void *user)
+/* The frontend's share of the Options settings, as currently applied. */
+static xxwidgets_status current_options(tui_app *ui, gui_options_values *values)
 {
-    (void)user;
-    if (gui_backend_set_db_paths(paths[0], paths[1], paths[2])) return 1;
-    cdie_translation_snprintf(error, capacity, CDIE_N_("Cannot load main signatures. Check the folder. Previous databases are still active."));
-    return 0;
+    xxwidgets_status status;
+    memset(values, 0, sizeof(*values));
+    status = xxwidgets_scan_panel_get_flags(ui->panel, &values->scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_get_databases(ui->panel, &values->scan.options.databases);
+    if (status == XXWIDGETS_OK) status = xxwidgets_app_get_font_options(ui->app, &values->fonts);
+    values->scan.modes = gui_backend_get_scan_modes();
+    gui_hex_view_get_options(&values->hex);
+    return status;
 }
-static void database_paths(tui_app *ui)
+
+/* Applies settings from Options or from the store; fonts only when changed. */
+static xxwidgets_status apply_options(tui_app *ui, const gui_options_values *values)
 {
-    const char *paths[3] = {gui_backend_main_db_path(), gui_backend_extra_db_path(), gui_backend_custom_db_path()};
-    const xxwidgets_database_paths_callbacks callbacks = {browse_database, apply_databases};
-    int accepted = 0;
-    xxwidgets_status status = xxwidgets_database_paths_dialog(ui->window, CDIE_TR("cdie Database paths"), paths, &callbacks, ui, &accepted);
-    if (accepted) {
-        char message[160];
-        char *tags = gui_backend_used_tags();
-        free(ui->type_path); ui->type_path = NULL;
-        status = xxwidgets_scan_panel_clear(ui->panel);
-        if (status == XXWIDGETS_OK) status = xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
-        if (status == XXWIDGETS_OK) status = tags ? xxwidgets_scan_panel_set_available_tags(ui->panel, tags) : XXWIDGETS_OUT_OF_MEMORY;
-        gui_backend_free(tags);
-        cdie_translation_snprintf(message, sizeof(message), CDIE_N_("Database reloaded: %d signatures. Press F5 to scan."), gui_backend_signature_count());
-        set_status(ui, status == XXWIDGETS_OK ? message : xxwidgets_status_string(status));
-    } else if (status != XXWIDGETS_OK) set_status(ui, xxwidgets_status_string(status));
+    xxwidgets_font_options fonts;
+    xxwidgets_status status;
+    gui_backend_set_scan_modes(values->scan.modes);
+    status = xxwidgets_scan_panel_set_flags(ui->panel, values->scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_set_databases(ui->panel, values->scan.options.databases);
+    gui_hex_view_set_options(&values->hex);
+    if (status == XXWIDGETS_OK) status = xxwidgets_app_get_font_options(ui->app, &fonts);
+    if (status == XXWIDGETS_OK && memcmp(&values->fonts, &fonts, sizeof(fonts))) {
+        status = xxwidgets_app_set_font_options(ui->app, &values->fonts);
+        if (status == XXWIDGETS_OK) layout(ui);
+    }
+    return status;
 }
-static void fonts(tui_app *ui)
+
+static void reload_tags(tui_app *ui)
 {
-    xxwidgets_font_options options;
-    int accepted = 0;
-    xxwidgets_status status = xxwidgets_app_get_font_options(ui->app, &options);
-    if (status == XXWIDGETS_OK) status = xxwidgets_font_options_dialog(ui->window, CDIE_TR("cdie Fonts"), &options, &accepted);
-    if (status == XXWIDGETS_OK && accepted) status = xxwidgets_app_set_font_options(ui->app, &options);
+    char message[160];
+    char *tags = gui_backend_used_tags();
+    xxwidgets_status status;
+    free(ui->type_path); ui->type_path = NULL;
+    status = xxwidgets_scan_panel_clear(ui->panel);
+    if (status == XXWIDGETS_OK) status = xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
+    if (status == XXWIDGETS_OK) status = tags ? xxwidgets_scan_panel_set_available_tags(ui->panel, tags) : XXWIDGETS_OUT_OF_MEMORY;
+    gui_backend_free(tags);
+    cdie_translation_snprintf(message, sizeof(message), CDIE_N_("Database reloaded: %d signatures. Press F5 to scan."), gui_backend_signature_count());
+    set_status(ui, status == XXWIDGETS_OK ? message : xxwidgets_status_string(status));
+}
+
+/* The shared Options window; Linux has no Explorer context menu page. */
+static void options_dialog(tui_app *ui, gui_options_page_id page)
+{
+    gui_options_host host = {GUI_OPTIONS_PAGE(GUI_OPTIONS_FONTS) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SCAN) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SIGNATURES) |
+                             GUI_OPTIONS_PAGE(GUI_OPTIONS_HEX) | GUI_OPTIONS_PAGE(GUI_OPTIONS_OPTIMIZATION),
+                             NULL, browse_database, ui};
+    gui_options_values values;
+    int accepted = 0, reloaded = 0;
+    xxwidgets_status status = current_options(ui, &values);
+    ui->options_page = page;
+    if (status == XXWIDGETS_OK) status = gui_options_dialog(ui->window, &host, &ui->options_page, &values, &accepted, &reloaded);
+    if (status != XXWIDGETS_OK) { set_status(ui, xxwidgets_status_string(status)); return; }
+    if (reloaded) reload_tags(ui);
+    if (!accepted) return;
+    status = apply_options(ui, &values);
     if (status != XXWIDGETS_OK) set_status(ui, xxwidgets_status_string(status));
-    else if (accepted) { layout(ui); set_status(ui, CDIE_TR("Interface fonts updated for this session.")); }
+    else if (!gui_settings_save(ui->settings, &values, ui->options_page))
+        set_status(ui, CDIE_TR("Options applied, but they could not be saved for the next start."));
+    else if (!reloaded) set_status(ui, CDIE_TR("Options applied."));
+}
+static void about_dialog(tui_app *ui)
+{
+    xxwidgets_about_dialog *about = NULL;
+    xxwidgets_status status = gui_about_create(cdie_about_png, cdie_about_png_size, &about);
+    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_show(about, ui->window);
+    if (about) (void)xxwidgets_about_dialog_destroy(about);
+    if (status != XXWIDGETS_OK) set_status(ui, xxwidgets_status_string(status));
 }
 static void browse(tui_app *ui)
 {
@@ -376,19 +415,36 @@ int main(int argc, char **argv)
     }
     if (smoke) (void)xxwidgets_app_set_create_hidden(ui.app, 1);
     if (!create_controls(&ui, path)) { fprintf(stderr, "Cannot create GUI controls.\n"); result = 1; goto cleanup; }
+    ui.options_page = GUI_OPTIONS_SCAN;
+    {
+        /* Saved Options apply before the first scan; smoke tests keep them in memory. */
+        gui_options_values values;
+        int stored = 1, databases = 1;
+        ui.settings = gui_settings_open(smoke, &stored);
+        status = current_options(&ui, &values);
+        if (status == XXWIDGETS_OK) databases = gui_settings_load(ui.settings, &values, &ui.options_page);
+        if (status == XXWIDGETS_OK) status = apply_options(&ui, &values);
+        if (status == XXWIDGETS_OK && !gui_backend_db_paths_current("", "", "")) reload_tags(&ui);
+        if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status));
+        else if (!databases) set_status(&ui, CDIE_TR("The saved signature folders cannot be loaded; the default ones are active."));
+        else if (!stored) set_status(&ui, CDIE_TR("Saved options cannot be read; the defaults are used."));
+    }
     if (smoke) { result = scan(&ui, 1) ? 0 : 1; if (!result) printf("GTK GUI smoke: %zu detections\n", xxwidgets_scan_panel_count(ui.panel)); goto cleanup; }
     ui.running = 1; ui.pending = path ? ACTION_SCAN : ACTION_NONE;
     while (ui.running) {
         status = xxwidgets_app_poll(ui.app, 30);
         if (status != XXWIDGETS_OK) { result = 1; break; }
         if (ui.needs_layout) { ui.needs_layout = 0; layout(&ui); }
+        const char *message = gui_tree_mark_process(ui.window);
+        if (message) set_status(&ui, message);
         int action = ui.pending; ui.pending = ACTION_NONE;
         if (action == ACTION_SCAN) (void)scan(&ui, 0);
         else if (action == ACTION_BROWSE) browse(&ui);
-        else if (action == ACTION_DATABASE_PATHS) database_paths(&ui);
-        else if (action == ACTION_FONTS) fonts(&ui);
+        else if (action == ACTION_DATABASE_PATHS) options_dialog(&ui, GUI_OPTIONS_SIGNATURES);
+        else if (action == ACTION_FONTS) options_dialog(&ui, GUI_OPTIONS_FONTS);
+        else if (action == ACTION_ABOUT) about_dialog(&ui);
         else if (action == ACTION_REPORT) { status = xxwidgets_scan_panel_show_report(ui.panel); if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status)); }
-        else if (action == ACTION_OPTIONS) { unsigned int modes = gui_backend_get_scan_modes(); int accepted = 0; status = gui_scan_modes_dialog(ui.window, &modes, &accepted); if (status == XXWIDGETS_OK && accepted) gui_backend_set_scan_modes(modes); else if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status)); }
+        else if (action == ACTION_OPTIONS) options_dialog(&ui, ui.options_page);
         else if (action >= ACTION_TOOL_BASE && action < ACTION_TOOL_BASE + 11) {
             char *selected = read_path(&ui);
             if (!selected || !*selected) set_status(&ui, CDIE_TR("Choose a file first."));
@@ -401,5 +457,7 @@ cleanup:
     if (ui.panel) (void)xxwidgets_scan_panel_destroy(ui.panel);
     cdie_translation_close();
     if (ui.app) (void)xxwidgets_app_destroy(ui.app);
+    gui_settings_close(ui.settings);
+    gui_tree_reset();
     gui_backend_shutdown(); return result;
 }

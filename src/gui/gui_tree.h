@@ -13,4 +13,17 @@
  * databases must not change until it returns. */
 int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const char *path, int type_id,
                   char **type, int *cancelled);
+
+/* The S and ? buttons DIE puts on result rows. The last scan's tree carries
+ * them: S on rows found by a script, ? on every detection. From the event
+ * callback, gui_tree_mark_event records a press (a CLICK from the panel's
+ * results tree) and returns 1; after xxwidgets_app_poll returns,
+ * gui_tree_mark_process shows it modally over owner: S the script in the
+ * signature editor, whose Run executes the edited copy on the scanned file;
+ * ? the bundled description, else a web search. Returns a line for the status
+ * bar, or NULL. Rows of a tree not filled by gui_tree_scan do nothing. */
+int gui_tree_mark_event(const xxwidgets_scan_panel *panel, const xxwidgets_event *event);
+const char *gui_tree_mark_process(xxwidgets_widget *owner);
+/* Releases the last scan's rows, e.g. before exit. */
+void gui_tree_reset(void);
 #endif

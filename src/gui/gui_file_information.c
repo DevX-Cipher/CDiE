@@ -61,7 +61,9 @@ static int collect_field(const xx_data_struct_record *record, void *user)
     if (!data->count) return 0;
     item = &data->items[data->count - 1];
     if (item->field_count == data->field_capacity) {
-        size_t capacity = data->field_capacity ? data->field_capacity * 2 : 16;
+        /* Most DataStructs (unwind codes, relocations) hold a few fields, and a
+         * large PE has tens of thousands: reserve little, the cap counts it. */
+        size_t capacity = data->field_capacity ? data->field_capacity * 2 : 4;
         size_t bytes = (capacity - data->field_capacity) * sizeof(*field);
         xxwidgets_data_struct_field *fields;
         if (capacity > 262144 || bytes > GUI_INFO_MAX_BYTES - data->bytes) return 0;

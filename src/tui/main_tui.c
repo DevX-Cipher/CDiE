@@ -3,6 +3,9 @@
 #include "../gui/gui_backend.h"
 #include "../gui/gui_tree.h"
 #include "../gui/gui_scan_options.h"
+#include "../gui/gui_options.h"
+#include "../gui/gui_about.h"
+#include "../gui/gui_settings.h"
 #include "global.h"
 #include <xxwidgets/xxwidgets.h>
 #include <xxwidgets/xxwidgets_combobox.h>
@@ -24,7 +27,7 @@
 #include <unistd.h>
 #endif
 
-enum { ACTION_NONE, ACTION_SCAN, ACTION_REPORT, ACTION_PATH, ACTION_QUIT, ACTION_HELP, ACTION_OPTIONS };
+enum { ACTION_NONE, ACTION_SCAN, ACTION_REPORT, ACTION_PATH, ACTION_QUIT, ACTION_HELP, ACTION_OPTIONS, ACTION_ABOUT };
 enum { MIN_COLUMNS = 64, MIN_ROWS = 25 };
 
 typedef struct tui_options {
@@ -37,6 +40,10 @@ typedef struct tui_app {
     xxwidgets_widget *window, *path_label, *path, *status, *hint, *help, *quit;
     xxwidgets_scan_panel *panel;
     char *type_path;
+    gui_options_page_id options_page;
+    /* Shared with the GUI: keep its fonts and Hex settings when saving. */
+    xx_settings *settings;
+    gui_options_values stored;
     int running, pending, busy, columns, rows, small;
 } tui_app;
 
@@ -45,12 +52,14 @@ typedef struct file_types { file_type *items; size_t count; int failed; } file_t
 
 static const char help_text[] =
     CDIE_N_("Enter a file path, then press Enter or F5 to scan.\n"
-    "F2 opens scan modes, including overlays, resources and archive members.\n"
+    "F2 opens Options: scan flags and modes, signature folders and CPU optimization.\n"
+    "F3 shows About.\n"
     "Ctrl+O focuses the path. Ctrl+R or Ctrl+P opens the full report. Ctrl+Q exits.\n"
     "Tab / Shift+Tab move between controls. Enter opens a choice list;\n"
     "Up / Down select an item, Space toggles a scan flag or tag, Escape closes the list.\n"
     "Results: Up / Down, Home / End and PageUp / PageDown scroll;\n"
     "Left / Right collapse or expand; Shift+Left / Shift+Right scroll sideways.\n"
+    "On a result row, S opens the signature that found it ([S]) and ? its description ([?]).\n"
     "A scan runs on a worker. After one second its progress dialog offers Cancel.\n"
     "Flags, database checks and include/exclude tags apply to the next scan.\n"
     "Main database is always used. Empty include tags allow every signature.\n"
@@ -231,7 +240,9 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         (void)xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE))
         ui->pending = ACTION_SCAN;
-    else if (event->type == XXWIDGETS_EVENT_CLICK) {
+    else if (gui_tree_mark_event(ui->panel, event)) {
+        /* S or ? typed on a result row: shown after polling returns. */
+    } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == ui->quit) ui->running = 0;
         else if (event->widget == ui->help) ui->pending = ACTION_HELP;
         else if (event->widget == control(ui, XXWIDGETS_SCAN_PANEL_SCAN)) ui->pending = ACTION_SCAN;
@@ -381,18 +392,63 @@ cleanup:
     return ok;
 }
 
+/* The shared Options window, limited to what a terminal can use. */
+static void options_dialog(tui_app *ui)
+{
+    gui_options_host host = {GUI_OPTIONS_PAGE(GUI_OPTIONS_SCAN) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SIGNATURES) | GUI_OPTIONS_PAGE(GUI_OPTIONS_OPTIMIZATION),
+                             NULL, NULL, NULL};
+    gui_options_values values = ui->stored;
+    int accepted = 0, reloaded = 0;
+    xxwidgets_status status;
+    status = xxwidgets_scan_panel_get_flags(ui->panel, &values.scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_get_databases(ui->panel, &values.scan.options.databases);
+    values.scan.modes = gui_backend_get_scan_modes();
+    if (status == XXWIDGETS_OK) status = gui_options_dialog(ui->window, &host, &ui->options_page, &values, &accepted, &reloaded);
+    if (status != XXWIDGETS_OK) { set_status(ui, xxwidgets_status_string(status)); return; }
+    if (reloaded) {
+        char message[160], *tags = gui_backend_used_tags();
+        if (!tags) { set_status(ui, xxwidgets_status_string(XXWIDGETS_OUT_OF_MEMORY)); return; }
+        status = xxwidgets_scan_panel_clear(ui->panel);
+        if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_set_available_tags(ui->panel, tags);
+        gui_backend_free(tags);
+        if (status != XXWIDGETS_OK) { set_status(ui, xxwidgets_status_string(status)); return; }
+        cdie_translation_snprintf(message, sizeof(message), CDIE_N_("Database reloaded: %d signatures. Choose a file and press Scan."),
+                                  gui_backend_signature_count());
+        set_status(ui, message);
+    }
+    if (!accepted) return;
+    gui_backend_set_scan_modes(values.scan.modes);
+    status = xxwidgets_scan_panel_set_flags(ui->panel, values.scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_set_databases(ui->panel, values.scan.options.databases);
+    if (status != XXWIDGETS_OK) { set_status(ui, xxwidgets_status_string(status)); return; }
+    ui->stored = values;
+    if (!gui_settings_save(ui->settings, &values, ui->options_page))
+        set_status(ui, CDIE_TR("Options applied, but they could not be saved for the next start."));
+    else if (!reloaded) set_status(ui, CDIE_TR("Options applied."));
+}
+
+/* The terminal shows About as text: there is no picture. */
+static void about_dialog(tui_app *ui)
+{
+    xxwidgets_about_dialog *about = NULL;
+    xxwidgets_status status = gui_about_create(NULL, 0, &about);
+    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_show(about, ui->window);
+    if (about) (void)xxwidgets_about_dialog_destroy(about);
+    if (status != XXWIDGETS_OK) set_status(ui, xxwidgets_status_string(status));
+}
+
 static int create_controls(tui_app *ui, const char *startup, int smoke)
 {
     static const xxwidgets_shortcut shortcuts[] = {
         {"F5", ACTION_SCAN}, {"Ctrl+R", ACTION_REPORT}, {"Ctrl+P", ACTION_REPORT},
-        {"Ctrl+O", ACTION_PATH}, {"Ctrl+Q", ACTION_QUIT}, {"F1", ACTION_HELP}, {"F2", ACTION_OPTIONS}
+        {"Ctrl+O", ACTION_PATH}, {"Ctrl+Q", ACTION_QUIT}, {"F1", ACTION_HELP}, {"F2", ACTION_OPTIONS}, {"F3", ACTION_ABOUT}
     };
     char *tags;
     if (xxwidgets_widget_create(ui->app, NULL, XXWIDGETS_WINDOW, gui_backend_app_title(), (xxwidgets_rect){0, 0, 78, 23}, &ui->window) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, CDIE_TR("File:"), (xxwidgets_rect){1, 1, 5, 1}, &ui->path_label) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_EDIT, startup ? startup : "", (xxwidgets_rect){6, 0, 71, 3}, &ui->path) != XXWIDGETS_OK ||
         xxwidgets_scan_panel_create(ui->window, (xxwidgets_rect){1, 4, 76, 14}, &ui->panel) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, CDIE_TR("F2: modes  F5: scan  Ctrl+R/P: report\nCtrl+O: file path  Esc/Ctrl+Q: quit"), (xxwidgets_rect){1, 19, 54, 2}, &ui->hint) != XXWIDGETS_OK ||
+        xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, CDIE_TR("F2: options  F3: about  F5: scan  Ctrl+R/P: report\nCtrl+O: file path  Esc/Ctrl+Q: quit"), (xxwidgets_rect){1, 19, 54, 2}, &ui->hint) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Help F1"), (xxwidgets_rect){56, 19, 10, 2}, &ui->help) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_BUTTON, CDIE_TR("Quit"), (xxwidgets_rect){67, 19, 10, 2}, &ui->quit) != XXWIDGETS_OK ||
         xxwidgets_widget_create(ui->app, ui->window, XXWIDGETS_LABEL, "", (xxwidgets_rect){1, 22, 76, 1}, &ui->status) != XXWIDGETS_OK) return 0;
@@ -423,18 +479,28 @@ static int tui_run_options(int argc, char **argv)
     const char *failure = NULL;
     char *report = NULL;
     size_t count = 0, required = 0;
-    int parsed = parse_options(argc, argv, &options), result = CR_SUCCESS, loaded;
+    int parsed = parse_options(argc, argv, &options), result = CR_SUCCESS, loaded, settings_read = 1, settings_databases = 1;
     if (parsed <= 0) return parsed < 0 ? CR_INVALIDPARAMETER : CR_SUCCESS;
     if (!interactive_terminal()) {
         fprintf(stderr, "cdie_tui requires an interactive terminal. Use cdie for console or redirected output.\n");
         return CR_CANNOTOPENFILE;
     }
     loaded = gui_backend_init();
+    /* Saved Options first, so database folders given on the command line win. */
+    ui.options_page = GUI_OPTIONS_SCAN;
+    ui.settings = gui_settings_open(options.smoke, &settings_read);
+    ui.stored.scan.options.flags = XXWIDGETS_SCAN_DEEP | XXWIDGETS_SCAN_HEURISTIC | XXWIDGETS_SCAN_VERBOSE | XXWIDGETS_SCAN_FORMAT;
+    ui.stored.scan.options.databases = XXWIDGETS_SCAN_DATABASE_EXTRA | XXWIDGETS_SCAN_DATABASE_CUSTOM;
+    (void)xxwidgets_font_options_init(&ui.stored.fonts);
+    (void)xxwidgets_hex_options_init(&ui.stored.hex);
+    settings_databases = gui_settings_load(ui.settings, &ui.stored, &ui.options_page);
+    loaded = gui_backend_signature_count() > 0 || loaded;
     if (options.main_db || options.extra_db || options.custom_db)
         loaded = gui_backend_set_db_paths(options.main_db, options.extra_db, options.custom_db);
     if (!loaded) {
         fprintf(stderr, "cdie_tui: cannot load main signatures from %s. Use -D PATH.\n",
             options.main_db ? options.main_db : gui_backend_main_db_path());
+        gui_settings_close(ui.settings);
         gui_backend_shutdown();
         return CR_CANNOTFINDDATABASE;
     }
@@ -451,6 +517,12 @@ static int tui_run_options(int argc, char **argv)
         if (status != XXWIDGETS_OK) { failure = xxwidgets_status_string(status); result = CR_CANNOTOPENFILE; goto cleanup; }
     }
     if (!create_controls(&ui, options.file, options.smoke)) { failure = "cannot create terminal controls"; result = CR_CANNOTOPENFILE; goto cleanup; }
+    if (xxwidgets_scan_panel_set_flags(ui.panel, ui.stored.scan.options.flags) != XXWIDGETS_OK ||
+        xxwidgets_scan_panel_set_databases(ui.panel, ui.stored.scan.options.databases) != XXWIDGETS_OK) {
+        failure = "cannot apply saved scan options"; result = CR_CANNOTOPENFILE; goto cleanup;
+    }
+    if (!settings_databases) set_status(&ui, CDIE_TR("The saved signature folders cannot be loaded; the default ones are active."));
+    else if (!settings_read) set_status(&ui, CDIE_TR("Saved options cannot be read; the defaults are used."));
     ui.running = 1;
     ui.pending = options.file ? ACTION_SCAN : ACTION_NONE;
     while (ui.running) {
@@ -460,6 +532,10 @@ static int tui_run_options(int argc, char **argv)
         if (status != XXWIDGETS_OK) { failure = xxwidgets_status_string(status); result = CR_CANNOTOPENFILE; break; }
         if (!ui.running) break;
         if (ui.small && !options.smoke) continue;
+        {
+            const char *message = gui_tree_mark_process(ui.window);
+            if (message) set_status(&ui, message);
+        }
         action = ui.pending;
         ui.pending = ACTION_NONE;
         if (action == ACTION_SCAN) {
@@ -480,13 +556,9 @@ static int tui_run_options(int argc, char **argv)
                 status = xxwidgets_scan_panel_show_report(ui.panel);
                 if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status));
             } else set_status(&ui, CDIE_TR("Scan a file first to view its report."));
-        } else if (action == ACTION_OPTIONS) {
-            unsigned int modes = gui_backend_get_scan_modes();
-            int accepted = 0;
-            status = gui_scan_modes_dialog(ui.window, &modes, &accepted);
-            if (status == XXWIDGETS_OK && accepted) gui_backend_set_scan_modes(modes);
-            if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status));
-        } else if (action == ACTION_HELP) {
+        } else if (action == ACTION_OPTIONS) options_dialog(&ui);
+        else if (action == ACTION_ABOUT) about_dialog(&ui);
+        else if (action == ACTION_HELP) {
             status = xxwidgets_text_dialog(ui.window, CDIE_TR("cdie terminal help"), CDIE_TR(help_text));
             if (status != XXWIDGETS_OK) set_status(&ui, xxwidgets_status_string(status));
         }
@@ -496,6 +568,8 @@ cleanup:
     if (ui.panel && xxwidgets_scan_panel_destroy(ui.panel) != XXWIDGETS_OK) result = CR_CANNOTOPENFILE;
     cdie_translation_close();
     if (ui.app && xxwidgets_app_destroy(ui.app) != XXWIDGETS_OK) result = CR_CANNOTOPENFILE;
+    gui_settings_close(ui.settings);
+    gui_tree_reset();
     gui_backend_shutdown();
     if (failure) fprintf(stderr, "cdie_tui: %s.\n", failure);
     if (options.smoke) {

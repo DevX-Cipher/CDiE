@@ -7,8 +7,6 @@
 #include <xxwidgets/xxwidgets.h>
 #include <xxwidgets/xxwidgets_scan_panel.h>
 #include <xxwidgets/xxwidgets_combobox.h>
-#include <xxwidgets/xxwidgets_scan_options.h>
-#include <xxwidgets/xxwidgets_optimization_options.h>
 #include <xxfclib/strings/xx_string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +15,9 @@
 #include "gui_backend.h"
 #include "app/cdie_translation.h"
 #include "gui_scan_options.h"
+#include "gui_options.h"
+#include "gui_about.h"
+#include "gui_settings.h"
 #include "gui_tree.h"
 #include "gui_file_information.h"
 #include "gui_entropy.h"
@@ -33,10 +34,12 @@
 enum { ACTION_NONE, ACTION_SCAN, ACTION_OPEN, ACTION_REPORT, ACTION_OPTIONS,
        ACTION_DATABASES, ACTION_OPTIMIZATION, ACTION_ABOUT, ACTION_FILE_INFORMATION, ACTION_ENTROPY, ACTION_HASH, ACTION_STRINGS, ACTION_HEX_VIEW, ACTION_DISASM, ACTION_MEMORY_MAP, ACTION_IMPORTS, ACTION_EXPORTS, ACTION_RESOURCES, ACTION_SYMBOLS };
 static xxwidgets_app *g_app;
-static xxwidgets_widget *g_window, *g_path, *g_browse, *g_status, *g_options, *g_databases, *g_optimization;
+static xxwidgets_widget *g_window, *g_path, *g_browse, *g_status, *g_options;
 static xxwidgets_widget *g_file_information, *g_entropy, *g_hash, *g_strings, *g_hex_view, *g_disasm, *g_memory_map, *g_imports, *g_exports, *g_resources, *g_symbols;
 static xxwidgets_scan_panel *g_panel;
 static int g_running = 1, g_pending, g_layout;
+static gui_options_page_id g_options_page = GUI_OPTIONS_SCAN;
+static xx_settings *g_settings;
 static NSString *g_type_path;
 
 static NSString *string(const char *text)
@@ -90,7 +93,7 @@ static void ready(void)
 {
     NSString *message = gui_backend_signature_count() ?
         [NSString stringWithFormat:cdie_ns_fmt(@"Ready. %d signatures loaded. Choose a file or drop one into the window."), gui_backend_signature_count()] :
-        cdie_ns_tr(@"No signature database loaded. Choose its folder using Database paths.");
+        cdie_ns_tr(@"No signature database loaded. Choose its folder in Options > Signatures.");
     xxwidgets_widget_set_text(g_status, [message UTF8String]);
 }
 static void open_path(NSString *path)
@@ -107,8 +110,6 @@ static void layout(void)
     xxwidgets_widget_set_rect(g_browse, (xxwidgets_rect){width - 13, 1, 11, 2});
     xxwidgets_scan_panel_set_rect(g_panel, (xxwidgets_rect){2, 4, width - 4, height - 13});
     xxwidgets_widget_set_rect(g_options, (xxwidgets_rect){2, height - 8, 16, 2});
-    xxwidgets_widget_set_rect(g_databases, (xxwidgets_rect){20, height - 8, 18, 2});
-    xxwidgets_widget_set_rect(g_optimization, (xxwidgets_rect){40, height - 8, 18, 2});
     xxwidgets_widget_set_rect(g_imports, (xxwidgets_rect){60, height - 8, 18, 2});
     xxwidgets_widget_set_rect(g_exports, (xxwidgets_rect){80, height - 8, 18, 2});
     xxwidgets_widget_set_rect(g_resources, (xxwidgets_rect){100, height - 8, 22, 2});
@@ -138,13 +139,13 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         xxwidgets_status status = apply_panel_tag_filters();
         if (status != XXWIDGETS_OK) report_ui_error("Read tag filters", status);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(XXWIDGETS_SCAN_PANEL_FILE_TYPE)) g_pending = ACTION_SCAN;
-    else if (event->type == XXWIDGETS_EVENT_CLICK) {
+    else if (gui_tree_mark_event(g_panel, event)) {
+        /* S or ? on a result row: shown after polling returns. */
+    } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == g_browse) g_pending = ACTION_OPEN;
         else if (event->widget == control(XXWIDGETS_SCAN_PANEL_SCAN)) g_pending = ACTION_SCAN;
         else if (event->widget == control(XXWIDGETS_SCAN_PANEL_REPORT)) g_pending = ACTION_REPORT;
         else if (event->widget == g_options) g_pending = ACTION_OPTIONS;
-        else if (event->widget == g_databases) g_pending = ACTION_DATABASES;
-        else if (event->widget == g_optimization) g_pending = ACTION_OPTIMIZATION;
         else if (event->widget == g_file_information) g_pending = ACTION_FILE_INFORMATION;
         else if (event->widget == g_entropy) g_pending = ACTION_ENTROPY;
         else if (event->widget == g_hash) g_pending = ACTION_HASH;
@@ -466,25 +467,90 @@ static void do_symbols(void)
     if (status != XXWIDGETS_OK) report_ui_error("Symbols", status);
 }
 
-static void do_options(void)
+static xxwidgets_status browse_database(xxwidgets_widget *dialog, const char *initial, char **path, int *accepted, void *user)
 {
-    xxwidgets_scan_options options = {0};
-    unsigned int modes = gui_backend_get_scan_modes();
-    int accepted = 0;
-    xxwidgets_scan_panel_get_flags(g_panel, &options.flags);
-    xxwidgets_scan_panel_get_databases(g_panel, &options.databases);
-    xxwidgets_status status = gui_scan_options_dialog(g_window, CDIE_TR("cdie Scan options"), &options, &modes, &accepted);
-    if (status != XXWIDGETS_OK) report_ui_error("Scan options", status);
-    else if (accepted) {
-        gui_backend_set_scan_modes(modes);
-        xxwidgets_scan_panel_set_flags(g_panel, options.flags);
-        xxwidgets_scan_panel_set_databases(g_panel, options.databases);
+    NSOpenPanel *picker = [NSOpenPanel openPanel];
+    (void)dialog; (void)user;
+    *path = NULL; *accepted = 0;
+    [picker setCanChooseDirectories:YES]; [picker setCanChooseFiles:NO];
+    [picker setTitle:cdie_ns_tr(@"Choose a signature database folder")];
+    if (initial && initial[0]) [picker setDirectoryURL:[NSURL fileURLWithPath:string(initial)]];
+    if ([picker runModal] != NSModalResponseOK) return XXWIDGETS_OK;
+    const char *chosen = [[[picker URL] path] UTF8String];
+    if (!chosen) return XXWIDGETS_INVALID_ARGUMENT;
+    /* The form releases the chosen path with free(). */
+    *path = strdup(chosen);
+    if (!*path) return XXWIDGETS_OUT_OF_MEMORY;
+    *accepted = 1;
+    return XXWIDGETS_OK;
+}
+
+/* The frontend's share of the Options settings, as currently applied. */
+static xxwidgets_status current_options(gui_options_values *values)
+{
+    xxwidgets_status status;
+    memset(values, 0, sizeof(*values));
+    status = xxwidgets_scan_panel_get_flags(g_panel, &values->scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_get_databases(g_panel, &values->scan.options.databases);
+    if (status == XXWIDGETS_OK) status = xxwidgets_app_get_font_options(g_app, &values->fonts);
+    values->scan.modes = gui_backend_get_scan_modes();
+    gui_hex_view_get_options(&values->hex);
+    return status;
+}
+
+/* Applies settings from Options or from the store; fonts only when changed. */
+static xxwidgets_status apply_options(const gui_options_values *values)
+{
+    xxwidgets_font_options fonts;
+    xxwidgets_status status;
+    gui_backend_set_scan_modes(values->scan.modes);
+    status = xxwidgets_scan_panel_set_flags(g_panel, values->scan.options.flags);
+    if (status == XXWIDGETS_OK) status = xxwidgets_scan_panel_set_databases(g_panel, values->scan.options.databases);
+    gui_hex_view_set_options(&values->hex);
+    if (status == XXWIDGETS_OK) status = xxwidgets_app_get_font_options(g_app, &fonts);
+    if (status == XXWIDGETS_OK && memcmp(&values->fonts, &fonts, sizeof(fonts))) {
+        status = xxwidgets_app_set_font_options(g_app, &values->fonts);
+        if (status == XXWIDGETS_OK) layout();
     }
+    return status;
+}
+
+/* The shared Options window; macOS has no Explorer context menu page. */
+static void do_options(gui_options_page_id page)
+{
+    gui_options_host host = {GUI_OPTIONS_PAGE(GUI_OPTIONS_FONTS) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SCAN) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SIGNATURES) |
+                             GUI_OPTIONS_PAGE(GUI_OPTIONS_HEX) | GUI_OPTIONS_PAGE(GUI_OPTIONS_OPTIMIZATION),
+                             NULL, browse_database, NULL};
+    gui_options_values values;
+    int accepted = 0, reloaded = 0;
+    xxwidgets_status status = current_options(&values);
+    g_options_page = page;
+    if (status == XXWIDGETS_OK) status = gui_options_dialog(g_window, &host, &g_options_page, &values, &accepted, &reloaded);
+    if (status != XXWIDGETS_OK) { report_ui_error("Options", status); return; }
+    if (reloaded) {
+        status = refresh_panel_tags();
+        if (status != XXWIDGETS_OK) { report_ui_error("Refresh signature tags", status); return; }
+        ready();
+    }
+    if (!accepted) return;
+    status = apply_options(&values);
+    if (status != XXWIDGETS_OK) report_ui_error("Apply options", status);
+    else if (!gui_settings_save(g_settings, &values, g_options_page))
+        xxwidgets_widget_set_text(g_status, CDIE_TR("Options applied, but they could not be saved for the next start."));
+    else if (!reloaded) xxwidgets_widget_set_text(g_status, CDIE_TR("Options applied."));
+}
+
+static void do_about(void)
+{
+    xxwidgets_about_dialog *about = NULL;
+    xxwidgets_status status = gui_about_create(cdie_about_png, cdie_about_png_size, &about);
+    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_show(about, g_window);
+    if (about) xxwidgets_about_dialog_destroy(about);
+    if (status != XXWIDGETS_OK) report_ui_error("About", status);
 }
 
 @interface CDIEApplication : NSObject <NSApplicationDelegate>
 - (void)action:(id)sender;
-- (void)chooseDatabase:(id)sender;
 @end
 @implementation CDIEApplication
 - (void)action:(id)sender { g_pending = (int)[sender tag]; }
@@ -498,61 +564,16 @@ static void do_options(void)
 }
 - (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename
 { (void)sender; open_path(filename); return YES; }
-- (void)chooseDatabase:(id)sender
-{
-    NSOpenPanel *picker = [NSOpenPanel openPanel];
-    [picker setCanChooseDirectories:YES]; [picker setCanChooseFiles:NO];
-    [picker setTitle:cdie_ns_tr(@"Choose a signature database folder")];
-    if ([picker runModal] == NSModalResponseOK) {
-        NSTextField *field = [[sender superview] viewWithTag:100 + [sender tag]];
-        [field setStringValue:[[picker URL] path]];
-    }
-}
 @end
 
-static void do_databases(CDIEApplication *delegate)
-{
-    NSAlert *dialog = [[[NSAlert alloc] init] autorelease];
-    [dialog setMessageText:@"Database paths"];
-    [dialog setInformativeText:@"Choose db, db_extra and db_custom folders. Empty paths use the bundled databases."];
-    [dialog addButtonWithTitle:@"Apply"]; [dialog addButtonWithTitle:@"Cancel"];
-    NSView *form = [[[NSView alloc] initWithFrame:NSMakeRect(0, 0, 560, 155)] autorelease];
-    const char *paths[] = {gui_backend_main_db_path(), gui_backend_extra_db_path(), gui_backend_custom_db_path()};
-    NSArray *names = @[@"Main", @"Extra", @"Custom"];
-    NSMutableArray *fields = [NSMutableArray array];
-    for (NSInteger i = 0; i < 3; ++i) {
-        CGFloat y = 110 - i * 50;
-        NSTextField *label = [NSTextField labelWithString:names[i]];
-        [label setFrame:NSMakeRect(0, y + 26, 500, 18)]; [form addSubview:label];
-        NSTextField *field = [[[NSTextField alloc] initWithFrame:NSMakeRect(0, y, 455, 24)] autorelease];
-        [field setStringValue:string(paths[i])]; [field setTag:100 + i];
-        [form addSubview:field]; [fields addObject:field];
-        NSButton *browse = [NSButton buttonWithTitle:@"Choose…" target:delegate action:@selector(chooseDatabase:)];
-        [browse setFrame:NSMakeRect(465, y - 2, 95, 28)]; [browse setTag:i]; [form addSubview:browse];
-    }
-    [dialog setAccessoryView:form];
-    if ([dialog runModal] != NSAlertFirstButtonReturn) return;
-    NSArray *values = @[[fields[0] stringValue], [fields[1] stringValue], [fields[2] stringValue]];
-    if (!gui_backend_set_db_paths([values[0] UTF8String], [values[1] UTF8String], [values[2] UTF8String])) {
-        xxwidgets_widget_set_text(g_status, CDIE_TR("Database load failed. Previous databases are still active."));
-        return;
-    }
-    [[NSUserDefaults standardUserDefaults] setObject:values forKey:@"DatabasePaths"];
-    {
-        xxwidgets_status status = refresh_panel_tags();
-        if (status != XXWIDGETS_OK) {
-            report_ui_error("Refresh signature tags", status);
-            return;
-        }
-    }
-    ready();
-}
 static void install_menu(CDIEApplication *delegate)
 {
     NSMenu *menu = [NSApp mainMenu];
     NSMenu *application = [[menu itemAtIndex:0] submenu];
     NSMenuItem *about = [[[NSMenuItem alloc] initWithTitle:cdie_ns_tr(@"About cdie") action:@selector(action:) keyEquivalent:@""] autorelease];
     [about setTarget:delegate]; [about setTag:ACTION_ABOUT]; [application insertItem:about atIndex:0];
+    NSMenuItem *settings = [[[NSMenuItem alloc] initWithTitle:cdie_ns_tr(@"Settings…") action:@selector(action:) keyEquivalent:@","] autorelease];
+    [settings setTarget:delegate]; [settings setTag:ACTION_OPTIONS]; [application insertItem:settings atIndex:1];
     NSMenuItem *file = [[[NSMenuItem alloc] initWithTitle:cdie_ns_tr(@"File") action:NULL keyEquivalent:@""] autorelease];
     NSMenu *submenu = [[[NSMenu alloc] initWithTitle:cdie_ns_tr(@"File")] autorelease];
     NSArray *titles = @[cdie_ns_tr(@"Open…"), cdie_ns_tr(@"Scan"), cdie_ns_tr(@"Report"), cdie_ns_tr(@"File Information"), cdie_ns_tr(@"Entropy"), cdie_ns_tr(@"Hash"), cdie_ns_tr(@"Strings"), cdie_ns_tr(@"Hex View"), cdie_ns_tr(@"Disasm"), cdie_ns_tr(@"Memory Map"), cdie_ns_tr(@"Imports"), cdie_ns_tr(@"Exports"), cdie_ns_tr(@"Resources"), cdie_ns_tr(@"Symbols")];
@@ -567,48 +588,12 @@ static void install_menu(CDIEApplication *delegate)
     [file setSubmenu:submenu]; [menu insertItem:file atIndex:1];
 }
 
-static int do_optimization(void)
-{
-    gui_backend_optimization_options current;
-    gui_backend_optimization_capabilities features;
-    xxwidgets_optimization_options options;
-    xxwidgets_optimization_capabilities capabilities;
-    xxwidgets_status status;
-    int accepted = 0;
-    if (!gui_backend_get_optimization_options(&current) ||
-        !gui_backend_get_optimization_capabilities(&features)) {
-        report_ui_error("Read optimization options", XXWIDGETS_PLATFORM_ERROR); return -1;
-    }
-    options.buffer_size = current.buffer_size;
-    options.file_buffer_size = current.file_buffer_size;
-    options.use_sse2 = current.use_sse2; options.use_avx2 = current.use_avx2; options.use_sse42 = current.use_sse42; options.use_aes = current.use_aes; options.use_sha = current.use_sha; options.use_vpclmulqdq = current.use_vpclmulqdq;
-    options.use_neon = current.use_neon; options.use_arm_crc32 = current.use_arm_crc32; options.use_arm_crypto = current.use_arm_crypto; options.use_arm_dotprod = current.use_arm_dotprod; options.use_arm_pmull = current.use_arm_pmull;
-    capabilities.sse2 = features.sse2; capabilities.avx2 = features.avx2; capabilities.sse42 = features.sse42; capabilities.aes = features.aes; capabilities.sha = features.sha; capabilities.vpclmulqdq = features.vpclmulqdq;
-    capabilities.neon = features.neon; capabilities.arm_crc32 = features.arm_crc32; capabilities.arm_crypto = features.arm_crypto; capabilities.arm_dotprod = features.arm_dotprod; capabilities.arm_pmull = features.arm_pmull;
-    status = xxwidgets_optimization_options_dialog(g_window, CDIE_TR("cdie Optimization"), &capabilities, &options, &accepted);
-    if (status != XXWIDGETS_OK) { report_ui_error("Open optimization options", status); return -1; }
-    if (accepted) {
-        current.buffer_size = options.buffer_size;
-        current.file_buffer_size = options.file_buffer_size;
-        current.use_sse2 = options.use_sse2; current.use_avx2 = options.use_avx2; current.use_sse42 = options.use_sse42; current.use_aes = options.use_aes; current.use_sha = options.use_sha; current.use_vpclmulqdq = options.use_vpclmulqdq;
-        current.use_neon = options.use_neon; current.use_arm_crc32 = options.use_arm_crc32; current.use_arm_crypto = options.use_arm_crypto; current.use_arm_dotprod = options.use_arm_dotprod; current.use_arm_pmull = options.use_arm_pmull;
-        if (!gui_backend_set_optimization_options(&current)) {
-            report_ui_error("Apply optimization options", XXWIDGETS_PLATFORM_ERROR); return -1;
-        }
-        xxwidgets_widget_set_text(g_status, CDIE_TR("Optimization settings applied to future scans."));
-    }
-    return accepted;
-}
-
-
 static int create_controls(void)
 {
     if (xxwidgets_widget_create(g_app, g_window, XXWIDGETS_EDIT, "", (xxwidgets_rect){2, 1, 75, 2}, &g_path) != XXWIDGETS_OK ||
         xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Open…"), (xxwidgets_rect){79, 1, 11, 2}, &g_browse) != XXWIDGETS_OK ||
         xxwidgets_scan_panel_create(g_window, (xxwidgets_rect){2, 4, 88, 21}, &g_panel) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Scan options…"), (xxwidgets_rect){2, 26, 16, 2}, &g_options) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Database paths…"), (xxwidgets_rect){20, 26, 18, 2}, &g_databases) != XXWIDGETS_OK ||
-        xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Optimization…"), (xxwidgets_rect){40, 26, 18, 2}, &g_optimization) != XXWIDGETS_OK ||
+        xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Options…"), (xxwidgets_rect){2, 26, 16, 2}, &g_options) != XXWIDGETS_OK ||
         xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("File Information…"), (xxwidgets_rect){2, 29, 26, 2}, &g_file_information) != XXWIDGETS_OK ||
         xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Entropy…"), (xxwidgets_rect){30, 29, 16, 2}, &g_entropy) != XXWIDGETS_OK ||
         xxwidgets_widget_create(g_app, g_window, XXWIDGETS_BUTTON, CDIE_TR("Hash…"), (xxwidgets_rect){48, 29, 14, 2}, &g_hash) != XXWIDGETS_OK ||
@@ -870,14 +855,27 @@ int main(int argc, char **argv)
         install_menu(delegate);
         gui_backend_init();
         if (!smoke) {
+            /* Folders saved by earlier versions; the shared settings below win. */
             NSArray *paths = [[NSUserDefaults standardUserDefaults] arrayForKey:@"DatabasePaths"];
             if ([paths count] == 3 && [paths[0] isKindOfClass:[NSString class]] &&
                 [paths[1] isKindOfClass:[NSString class]] && [paths[2] isKindOfClass:[NSString class]])
                 gui_backend_set_db_paths([paths[0] UTF8String], [paths[1] UTF8String], [paths[2] UTF8String]);
         }
+        int settings_read = 1, settings_databases = 1;
+        {
+            /* Saved Options apply before the first scan; smoke tests keep them in memory. */
+            gui_options_values values;
+            g_settings = gui_settings_open(smoke, &settings_read);
+            status = current_options(&values);
+            if (status == XXWIDGETS_OK) settings_databases = gui_settings_load(g_settings, &values, &g_options_page);
+            if (status == XXWIDGETS_OK) status = apply_options(&values);
+            if (status != XXWIDGETS_OK) { report_ui_error("Apply saved options", status); result = 1; goto finish; }
+        }
         status = refresh_panel_tags();
         if (status != XXWIDGETS_OK) { report_ui_error("Load signature tags", status); result = 1; goto finish; }
         ready(); layout();
+        if (!settings_databases) xxwidgets_widget_set_text(g_status, CDIE_TR("The saved signature folders cannot be loaded; the default ones are active."));
+        else if (!settings_read) xxwidgets_widget_set_text(g_status, CDIE_TR("Saved options cannot be read; the defaults are used."));
         if (smoke) { result = smoke_test(startup ?: [[NSBundle mainBundle] executablePath]); goto finish; }
         [window center]; [window makeKeyAndOrderFront:nil]; [NSApp activateIgnoringOtherApps:YES];
         xxwidgets_widget_focus(g_path);
@@ -888,6 +886,8 @@ int main(int argc, char **argv)
                 if (status != XXWIDGETS_OK) { result = 1; break; }
                 if (!g_running) break;
                 if (g_layout) { g_layout = 0; layout(); }
+                const char *message = gui_tree_mark_process(g_window);
+                if (message) xxwidgets_widget_set_text(g_status, message);
                 int action = g_pending; g_pending = ACTION_NONE;
                 switch (action) {
                 case ACTION_SCAN: do_scan(); break;
@@ -896,9 +896,9 @@ int main(int argc, char **argv)
                     status = xxwidgets_scan_panel_show_report(g_panel);
                     if (status != XXWIDGETS_OK) report_ui_error("Scan report", status);
                     break;
-                case ACTION_OPTIONS: do_options(); break;
-                case ACTION_DATABASES: do_databases(delegate); break;
-                case ACTION_OPTIMIZATION: do_optimization(); break;
+                case ACTION_OPTIONS: do_options(g_options_page); break;
+                case ACTION_DATABASES: do_options(GUI_OPTIONS_SIGNATURES); break;
+                case ACTION_OPTIMIZATION: do_options(GUI_OPTIONS_OPTIMIZATION); break;
                 case ACTION_FILE_INFORMATION: do_file_information(); break;
                 case ACTION_ENTROPY: do_entropy(); break;
                 case ACTION_HASH: do_hash(); break;
@@ -910,16 +910,14 @@ int main(int argc, char **argv)
                 case ACTION_EXPORTS: do_exports(); break;
                 case ACTION_RESOURCES: do_resources(); break;
                 case ACTION_SYMBOLS: do_symbols(); break;
-                case ACTION_ABOUT:
-                    [NSApp orderFrontStandardAboutPanelWithOptions:@{NSAboutPanelOptionApplicationName: @"cdie",
-                        NSAboutPanelOptionApplicationVersion: string(gui_backend_app_title()),
-                        @"Copyright": @"© 2026 hors · MIT License"}];
-                    break;
+                case ACTION_ABOUT: do_about(); break;
                 default: break;
                 }
             }
         }
 finish:
+        gui_settings_close(g_settings);
+        gui_tree_reset();
         gui_backend_shutdown();
         [g_type_path release]; g_type_path = nil;
         if (g_panel) xxwidgets_scan_panel_destroy(g_panel);

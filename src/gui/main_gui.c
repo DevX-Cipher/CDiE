@@ -57,7 +57,9 @@
 #include "gui_hash.h"
 #include "gui_strings.h"
 #include "gui_hex_view.h"
-#include "gui_png.h"
+#include "gui_about.h"
+#include "gui_options.h"
+#include "gui_settings.h"
 #include <xxfclib/rt/xx_rt.h>
 #include "gui_disasm.h"
 #include "gui_memory_map.h"
@@ -609,11 +611,56 @@ static void do_symbols(void)
     if (status != XXWIDGETS_OK) report_ui_error("Symbols", status);
 }
 
-/* All settings live in one Options window: a page list on the left and the
- * reusable xxwidgets forms stacked on the right, in Detect It Easy's order. */
-enum options_page_id { OPTIONS_FILE, OPTIONS_FONTS, OPTIONS_SCAN, OPTIONS_SIGNATURES, OPTIONS_HEX, OPTIONS_OPTIMIZATION, OPTIONS_PAGE_COUNT };
-static int g_optionsPage = OPTIONS_SCAN;
-static int g_databasesReloaded;
+/* All settings live in one Options window (gui_options.c): a page list on
+ * the left and the reusable xxwidgets forms on the right. */
+static gui_options_page_id g_optionsPage = GUI_OPTIONS_SCAN;
+static xx_settings *g_settings;
+
+/* The frontend's share of the Options settings, as currently applied. */
+static xxwidgets_status current_options(gui_options_values *values)
+{
+    values->scan.options.flags = flags_mask();
+    values->scan.options.databases = databases_mask();
+    values->scan.modes = gui_backend_get_scan_modes();
+    gui_hex_view_get_options(&values->hex);
+    return xxwidgets_app_get_font_options(g_app, &values->fonts);
+}
+
+/* Applies settings from Options or from the store; fonts only when changed. */
+static xxwidgets_status apply_options(const gui_options_values *values)
+{
+    xxwidgets_font_options fonts;
+    xxwidgets_status status;
+    gui_backend_set_scan_modes(values->scan.modes);
+    g_bFlagDeep = (values->scan.options.flags & XXWIDGETS_SCAN_DEEP) != 0;
+    g_bFlagHeur = (values->scan.options.flags & XXWIDGETS_SCAN_HEURISTIC) != 0;
+    g_bFlagVerbose = (values->scan.options.flags & XXWIDGETS_SCAN_VERBOSE) != 0;
+    g_bFlagAggr = (values->scan.options.flags & XXWIDGETS_SCAN_AGGRESSIVE) != 0;
+    g_bFlagHideUnknown = (values->scan.options.flags & XXWIDGETS_SCAN_HIDE_UNKNOWN) != 0;
+    g_bFlagFormat = (values->scan.options.flags & XXWIDGETS_SCAN_FORMAT) != 0;
+    g_bDbExtra = (values->scan.options.databases & XXWIDGETS_SCAN_DATABASE_EXTRA) != 0;
+    g_bDbCustom = (values->scan.options.databases & XXWIDGETS_SCAN_DATABASE_CUSTOM) != 0;
+    apply_flags_to_backend();
+    status = sync_panel_options();
+    if (status != XXWIDGETS_OK) return status;
+    gui_hex_view_set_options(&values->hex);
+    status = xxwidgets_app_get_font_options(g_app, &fonts);
+    if (status == XXWIDGETS_OK && memcmp(&values->fonts, &fonts, sizeof(fonts))) {
+        RECT bounds;
+        int width, height;
+        status = xxwidgets_app_set_font_options(g_app, &values->fonts);
+        if (status != XXWIDGETS_OK) return status;
+        layout();
+        GetWindowRect(native(g_window), &bounds);
+        width = bounds.right - bounds.left; height = bounds.bottom - bounds.top;
+        if (width < g_minWindowWidth || height < g_minWindowHeight)
+            SetWindowPos(native(g_window), NULL, 0, 0,
+                width < g_minWindowWidth ? g_minWindowWidth : width,
+                height < g_minWindowHeight ? g_minWindowHeight : height,
+                SWP_NOMOVE | SWP_NOZORDER);
+    }
+    return status;
+}
 
 static xxwidgets_status browse_database(xxwidgets_widget *dialog, const char *initial, char **path, int *accepted, void *user)
 {
@@ -644,81 +691,30 @@ static xxwidgets_status browse_database(xxwidgets_widget *dialog, const char *in
     return status;
 }
 
-static int apply_databases(const char *const paths[3], char *error, size_t capacity, void *user)
+static int do_settings(gui_options_page_id start)
 {
-    (void)user;
-    if (gui_backend_db_paths_current(paths[0], paths[1], paths[2])) return 1;
-    if (gui_backend_set_db_paths(paths[0], paths[1], paths[2])) { g_databasesReloaded = 1; return 1; }
-    lstrcpynA(error, CDIE_TR("Cannot load the main signature database. Check its folder and try again."), (int)capacity);
-    return 0;
-}
-
-static int do_settings(int start)
-{
-    xxwidgets_options_page pages[OPTIONS_PAGE_COUNT];
-    int ids[OPTIONS_PAGE_COUNT];
-    size_t count = 0, page = 0, i;
-    gui_scan_page_values scan;
-    xxwidgets_database_paths_page_values databases;
-    xxwidgets_hex_page_values hex;
-    xxwidgets_optimization_page_values optimization;
-    gui_backend_optimization_options current;
-    gui_backend_optimization_capabilities features;
-    xxwidgets_font_options fonts, previous_fonts;
-    xxwidgets_context_config context = {"cdie", "Scan with cdie", "*", NULL, XXWIDGETS_CONTEXT_CURRENT_USER};
+    gui_options_host host = {0};
+    gui_options_values values;
     WCHAR executable[32768];
     DWORD length = GetModuleFileNameW(NULL, executable, (DWORD)(sizeof(executable) / sizeof(executable[0])));
     char *program = NULL;
-    xxwidgets_status status = XXWIDGETS_OK;
-    int accepted = 0;
+    xxwidgets_status status;
+    int accepted = 0, reloaded = 0;
 
-    scan.options.flags = flags_mask();
-    scan.options.databases = databases_mask();
-    scan.modes = gui_backend_get_scan_modes();
-    databases.paths[0] = gui_backend_main_db_path();
-    databases.paths[1] = gui_backend_extra_db_path();
-    databases.paths[2] = gui_backend_custom_db_path();
-    databases.callbacks.browse = browse_database;
-    databases.callbacks.apply = apply_databases;
-    databases.user = NULL;
-    gui_hex_view_get_options(&hex.options);
-    hex.show_editable = 0;
-    if (!gui_backend_get_optimization_options(&current) || !gui_backend_get_optimization_capabilities(&features)) {
-        report_ui_error("Read optimization options", XXWIDGETS_PLATFORM_ERROR); return -1;
-    }
-    optimization.options.buffer_size = current.buffer_size;
-    optimization.options.file_buffer_size = current.file_buffer_size;
-    optimization.options.use_sse2 = current.use_sse2; optimization.options.use_avx2 = current.use_avx2; optimization.options.use_sse42 = current.use_sse42;
-    optimization.options.use_aes = current.use_aes; optimization.options.use_sha = current.use_sha; optimization.options.use_vpclmulqdq = current.use_vpclmulqdq;
-    optimization.options.use_neon = current.use_neon; optimization.options.use_arm_crc32 = current.use_arm_crc32; optimization.options.use_arm_crypto = current.use_arm_crypto;
-    optimization.options.use_arm_dotprod = current.use_arm_dotprod; optimization.options.use_arm_pmull = current.use_arm_pmull;
-    optimization.capabilities.sse2 = features.sse2; optimization.capabilities.avx2 = features.avx2; optimization.capabilities.sse42 = features.sse42;
-    optimization.capabilities.aes = features.aes; optimization.capabilities.sha = features.sha; optimization.capabilities.vpclmulqdq = features.vpclmulqdq;
-    optimization.capabilities.neon = features.neon; optimization.capabilities.arm_crc32 = features.arm_crc32; optimization.capabilities.arm_crypto = features.arm_crypto;
-    optimization.capabilities.arm_dotprod = features.arm_dotprod; optimization.capabilities.arm_pmull = features.arm_pmull;
-    status = xxwidgets_app_get_font_options(g_app, &fonts);
+    status = current_options(&values);
     if (status != XXWIDGETS_OK) { report_ui_error("Read interface fonts", status); return -1; }
-    previous_fonts = fonts;
-
     /* The context menu needs the program path; without it the page is left out. */
     if (length && length < sizeof(executable) / sizeof(executable[0])) program = xx_str_unicode_to_utf8(executable);
-    context.executable = program;
-    if (program && xxwidgets_options_page_context(&pages[count], CDIE_TR("File"), &context) == XXWIDGETS_OK) ids[count++] = OPTIONS_FILE;
-    status = xxwidgets_options_page_fonts(&pages[count], CDIE_TR("Fonts"), &fonts);
-    if (status == XXWIDGETS_OK) { ids[count++] = OPTIONS_FONTS; status = gui_scan_options_page(&pages[count], CDIE_TR("Scan"), &scan); }
-    if (status == XXWIDGETS_OK) { ids[count++] = OPTIONS_SCAN; status = xxwidgets_options_page_database_paths(&pages[count], CDIE_TR("Signatures"), &databases); }
-    if (status == XXWIDGETS_OK) { ids[count++] = OPTIONS_SIGNATURES; status = xxwidgets_options_page_hex(&pages[count], CDIE_TR("Hex"), &hex); }
-    if (status == XXWIDGETS_OK) { ids[count++] = OPTIONS_HEX; status = xxwidgets_options_page_optimization(&pages[count], CDIE_TR("Optimization"), &optimization); }
-    if (status == XXWIDGETS_OK) ids[count++] = OPTIONS_OPTIMIZATION;
-    for (i = 0; i < count; ++i) if (ids[i] == start) page = i;
-    g_databasesReloaded = 0;
-    if (status == XXWIDGETS_OK) status = xxwidgets_options_pages_dialog(g_window, CDIE_TR("Options"), pages, count, &page, &accepted);
+    host.pages = GUI_OPTIONS_PAGE(GUI_OPTIONS_FILE) | GUI_OPTIONS_PAGE(GUI_OPTIONS_FONTS) | GUI_OPTIONS_PAGE(GUI_OPTIONS_SCAN) |
+                 GUI_OPTIONS_PAGE(GUI_OPTIONS_SIGNATURES) | GUI_OPTIONS_PAGE(GUI_OPTIONS_HEX) | GUI_OPTIONS_PAGE(GUI_OPTIONS_OPTIMIZATION);
+    host.executable = program;
+    host.browse = browse_database;
+    g_optionsPage = start;
+    status = gui_options_dialog(g_window, &host, &g_optionsPage, &values, &accepted, &reloaded);
     if (program) xx_str_free(program);
     if (status != XXWIDGETS_OK) { report_ui_error("Open Options", status); return -1; }
-    g_optionsPage = ids[page];
 
-    /* A database page may reload before a later page rejects OK. */
-    if (g_databasesReloaded) {
+    if (reloaded) {
         WCHAR text[160];
         clear_scan();
         status = refresh_panel_tags();
@@ -727,131 +723,17 @@ static int do_settings(int start)
         set_status_wide(text);
     }
     if (!accepted) return 0;
-
-    gui_backend_set_scan_modes(scan.modes);
-    g_bFlagDeep = (scan.options.flags & XXWIDGETS_SCAN_DEEP) != 0;
-    g_bFlagHeur = (scan.options.flags & XXWIDGETS_SCAN_HEURISTIC) != 0;
-    g_bFlagVerbose = (scan.options.flags & XXWIDGETS_SCAN_VERBOSE) != 0;
-    g_bFlagAggr = (scan.options.flags & XXWIDGETS_SCAN_AGGRESSIVE) != 0;
-    g_bFlagHideUnknown = (scan.options.flags & XXWIDGETS_SCAN_HIDE_UNKNOWN) != 0;
-    g_bFlagFormat = (scan.options.flags & XXWIDGETS_SCAN_FORMAT) != 0;
-    g_bDbExtra = (scan.options.databases & XXWIDGETS_SCAN_DATABASE_EXTRA) != 0;
-    g_bDbCustom = (scan.options.databases & XXWIDGETS_SCAN_DATABASE_CUSTOM) != 0;
-    apply_flags_to_backend();
-    status = sync_panel_options();
-    if (status != XXWIDGETS_OK) { report_ui_error("Update scan options", status); return -1; }
-
-    current.buffer_size = optimization.options.buffer_size;
-    current.file_buffer_size = optimization.options.file_buffer_size;
-    current.use_sse2 = optimization.options.use_sse2; current.use_avx2 = optimization.options.use_avx2; current.use_sse42 = optimization.options.use_sse42;
-    current.use_aes = optimization.options.use_aes; current.use_sha = optimization.options.use_sha; current.use_vpclmulqdq = optimization.options.use_vpclmulqdq;
-    current.use_neon = optimization.options.use_neon; current.use_arm_crc32 = optimization.options.use_arm_crc32; current.use_arm_crypto = optimization.options.use_arm_crypto;
-    current.use_arm_dotprod = optimization.options.use_arm_dotprod; current.use_arm_pmull = optimization.options.use_arm_pmull;
-    if (!gui_backend_set_optimization_options(&current)) {
-        report_ui_error("Apply optimization options", XXWIDGETS_PLATFORM_ERROR); return -1;
-    }
-    gui_hex_view_set_options(&hex.options);
-
-    if (memcmp(&fonts, &previous_fonts, sizeof(fonts))) {
-        RECT bounds;
-        int width, height;
-        status = xxwidgets_app_set_font_options(g_app, &fonts);
-        if (status != XXWIDGETS_OK) { report_ui_error("Set interface fonts", status); return -1; }
-        layout();
-        GetWindowRect(native(g_window), &bounds);
-        width = bounds.right - bounds.left; height = bounds.bottom - bounds.top;
-        if (width < g_minWindowWidth || height < g_minWindowHeight)
-            SetWindowPos(native(g_window), NULL, 0, 0,
-                width < g_minWindowWidth ? g_minWindowWidth : width,
-                height < g_minWindowHeight ? g_minWindowHeight : height,
-                SWP_NOMOVE | SWP_NOZORDER);
-    }
-    if (!g_databasesReloaded) xxwidgets_widget_set_text(g_status, CDIE_TR("Options applied."));
+    status = apply_options(&values);
+    if (status != XXWIDGETS_OK) { report_ui_error("Apply options", status); return -1; }
+    if (!gui_settings_save(g_settings, &values, g_optionsPage))
+        xxwidgets_widget_set_text(g_status, CDIE_TR("Options applied, but they could not be saved for the next start."));
+    else if (!reloaded) xxwidgets_widget_set_text(g_status, CDIE_TR("Options applied."));
     return 1;
 }
 
 static xxwidgets_status configure_about(void)
 {
-    static const char license[] =
-        "MIT License\n\n"
-        "Permission is hereby granted, free of charge, to any person obtaining a copy "
-        "of this software and associated documentation files (the Software), to deal "
-        "in the Software without restriction, including without limitation the rights "
-        "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
-        "copies of the Software, and to permit persons to whom the Software is "
-        "furnished to do so, subject to the following conditions:\n\n"
-        "The above copyright notice and this permission notice shall be included in all "
-        "copies or substantial portions of the Software.\n\n"
-        "THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR "
-        "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, "
-        "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE "
-        "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER "
-        "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, "
-        "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.";
-    /* Detect It Easy's About: Follow me buttons, then the Info lines; values
-     * that are not URLs (PayPal, BTC) are copied to the clipboard on click. */
-    static const char *const social[][2] = {
-        {"GitHub", "https://github.com/horsicq"}, {"Twitter", "https://twitter.com/horsicq"},
-        {"YouTube", "https://www.youtube.com/@funreverseengineering"}};
-    static const char *const info[][3] = {
-        {"Bugreports:", "horsicq@gmail.com", "mailto:horsicq@gmail.com"},
-        {"Website:", "http://ntinfo.biz", "http://ntinfo.biz"},
-        {"Donate(Paypal):", "ntinfo.re@gmail.com", "ntinfo.re@gmail.com"},
-        {"Donate(BTC):", "3DqddVBX9PKqMvNPXZ3gPHBNNRtD9CnmJo", "3DqddVBX9PKqMvNPXZ3gPHBNNRtD9CnmJo"},
-        {"Source code:", "https://github.com/horsicq/DIE-engine", "https://github.com/horsicq/DIE-engine"}};
-    static const char *const libraries[][2] = {
-        {"xxfclib:", "formats, scan engine and runtime"}, {"xxwidgets:", "native widgets and dialogs"}, {"cdisasm:", "disassembler"}};
-    const char *title = gui_backend_app_title();
-    const char *version = title;
-    char line[128];
-    xxwidgets_status status;
-    size_t i;
-    while (*version && *version != ' ') ++version;
-    if (*version) ++version;
-    status = xxwidgets_about_dialog_create(&g_about);
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_TITLE, CDIE_TR("About"));
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_CLOSE_LABEL, CDIE_TR("OK"));
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_BUILD_DATE, __DATE__);
-    if (status == XXWIDGETS_OK)
-        status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_THANKS_URL, "https://github.com/horsicq/DIE-engine/blob/master/THANKS.md");
-    if (status == XXWIDGETS_OK)
-        status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_UPDATES_URL, "https://github.com/horsicq/DIE-engine/releases");
-    for (i = 0; status == XXWIDGETS_OK && i < sizeof(social) / sizeof(social[0]); ++i)
-        status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_SOCIAL, social[i][0], NULL, social[i][1]);
-    wsprintfA(line, "Detect It Easy (cdie) v%s", version);
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_INFO, line, NULL, NULL);
-    if (status == XXWIDGETS_OK)
-        status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_INFO, "Copyright (C) 2006-2008 Hellsp@wn", NULL, NULL);
-    /* __DATE__ is "Mmm dd yyyy": the copyright runs to the build year. */
-    wsprintfA(line, "Copyright (C) 2012-%s Hors", __DATE__ + 7);
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_INFO, line, NULL, NULL);
-    for (i = 0; status == XXWIDGETS_OK && i < sizeof(info) / sizeof(info[0]); ++i)
-        status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_INFO, info[i][0], info[i][1], info[i][2]);
-    for (i = 0; status == XXWIDGETS_OK && i < sizeof(libraries) / sizeof(libraries[0]); ++i)
-        status = xxwidgets_about_dialog_add_item(g_about, XXWIDGETS_ABOUT_ITEM_LIBRARY, libraries[i][0], libraries[i][1], NULL);
-    if (status == XXWIDGETS_OK) {
-        HRSRC resource = FindResourceW(g_hInst, MAKEINTRESOURCEW(IDR_ABOUT_IMAGE), MAKEINTRESOURCEW(10)); /* RT_RCDATA */
-        HGLOBAL loaded = resource ? LoadResource(g_hInst, resource) : NULL;
-        const unsigned char *png = loaded ? (const unsigned char *)LockResource(loaded) : NULL;
-        unsigned char *rgba = NULL;
-        unsigned int width = 0, height = 0;
-        /* A missing or undecodable picture leaves the text layout intact. */
-        if (png && gui_png_decode_rgba(png, SizeofResource(g_hInst, resource), &rgba, &width, &height)) {
-            status = xxwidgets_about_dialog_set_image(g_about, rgba, width, height, (size_t)width * 4);
-            xx_rt_free(rgba);
-        }
-    }
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_PROGRAM_NAME, "Detect It Easy - cdie");
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_VERSION, version);
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_DESCRIPTION,
-        "Detect It Easy scan engine, ported to C.\nNative graphical frontend with the reusable xxwidgets scan panel and dialogs.");
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_COPYRIGHT,
-        "Copyright (C) 2026 hors <horsicq@gmail.com>");
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_WEBSITE, "https://ntinfo.biz");
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_LICENSE, license);
-    if (status == XXWIDGETS_OK) status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_CREDITS,
-        "Detect It Easy by hors and contributors\nxxfclib - C format and runtime support\nxxwidgets - native widgets and common dialogs");
-    return status;
+    return gui_about_create(cdie_about_png, cdie_about_png_size, &g_about);
 }
 
 static void do_about(void)
@@ -1076,6 +958,8 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     } else if (event->type == XXWIDGETS_EVENT_RESIZE && event->widget == g_window) layout();
     else if (event->type == XXWIDGETS_EVENT_DROP_FILES && event->widget == g_window && event->path_count) {
         if (xxwidgets_widget_set_text(g_path, event->paths[0]) == XXWIDGETS_OK) g_pending = ACTION_SCAN;
+    } else if (gui_tree_mark_event(g_panel, event)) {
+        /* S or ? on a result row: shown after polling returns. */
     } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == g_scan) g_pending = ACTION_SCAN;
         else if (event->widget == g_browse) g_pending = ACTION_BROWSE;
@@ -1185,7 +1069,8 @@ static UINT_PTR g_smokeTimer;
 static int g_smokeAction, g_smokeDone, g_smokeTicks, g_smokeFailed, g_smokePhase;
 
 /* Options smoke actions; 4..6 drive the Optimization page. */
-enum { SMOKE_SCAN_CANCEL = 20, SMOKE_SCAN_OK, SMOKE_FONTS_CANCEL, SMOKE_FONTS_OK, SMOKE_FILE_CANCEL, SMOKE_SIGNATURES_CANCEL, SMOKE_ABOUT };
+enum { SMOKE_SCAN_CANCEL = 20, SMOKE_SCAN_OK, SMOKE_FONTS_CANCEL, SMOKE_FONTS_OK, SMOKE_FILE_CANCEL, SMOKE_SIGNATURES_CANCEL, SMOKE_ABOUT,
+       SMOKE_SIGNATURE };
 static const WCHAR *g_smokePage;
 static int g_smokePageState, g_smokeContextChecked;
 
@@ -1365,13 +1250,21 @@ static int smoke_selected_size(HWND combo, const WCHAR *label)
     return SendMessageW(combo, CB_GETLBTEXT, (WPARAM)selected, (LPARAM)text) != CB_ERR && !lstrcmpW(text, label);
 }
 
+
 static BOOL CALLBACK smoke_windows(HWND window, LPARAM data)
 {
     WCHAR title[128];
     (void)data;
     if (GetWindow(window, GW_OWNER) != native(g_window)) return TRUE;
     GetWindowTextW(window, title, 128);
-    if (lstrcmpW(title, g_smokeTitle)) return TRUE;
+    {
+        /* A trailing '*' matches any rest, e.g. a signature's file name. */
+        int length = lstrlenW(g_smokeTitle);
+        if (length && g_smokeTitle[length - 1] == L'*'
+                ? CompareStringOrdinal(title, min(lstrlenW(title), length - 1), g_smokeTitle, length - 1, FALSE) != CSTR_EQUAL
+                : lstrcmpW(title, g_smokeTitle) != 0)
+            return TRUE;
+    }
     if (IsWindowEnabled(native(g_window))) return TRUE;
     /* Options pages share one window: pick the page, then wait until only it shows. */
     if (g_smokePage && g_smokePageState < 2) {
@@ -1516,6 +1409,11 @@ optimization_done:;
             !smoke_child(window, L"Button", L"Check updates", 1) || !smoke_child(window, L"Static", L"About image", 1))
             g_smokeFailed = 1;
         smoke_click(window, L"OK");
+    } else if (g_smokeAction == SMOKE_SIGNATURE) {
+        /* S: the script in the signature editor, Run wired to the scanned file. */
+        HWND run = smoke_child(window, L"Button", L"Run", 1);
+        if (!run || !IsWindowEnabled(run) || !smoke_child(window, L"Button", L"Read-only", 1)) g_smokeFailed = 1;
+        smoke_click(window, L"Close");
     } else if (g_smokeAction == SMOKE_SIGNATURES_CANCEL) {
         HWND edit = smoke_child(window, L"Edit", NULL, 1);
         if (!edit || !SetWindowTextW(edit, L"Smoke test cancelled database path")) g_smokeFailed = 1;
@@ -1567,10 +1465,16 @@ static int smoke_finish(void)
 
 static int smoke_failed(unsigned int line)
 {
-    char text[80];
+    char text[80], status[512];
     DWORD written;
     int length = wsprintfA(text, "cdie GUI smoke failed at main_gui.c:%u\r\n", line);
     WriteFile(GetStdHandle(STD_ERROR_HANDLE), text, (DWORD)length, &written, NULL);
+    /* The status line usually says why. */
+    if (g_status && xxwidgets_widget_get_text(g_status, status, sizeof(status), NULL) == XXWIDGETS_OK && status[0]) {
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), "Status: ", 8, &written, NULL);
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), status, (DWORD)lstrlenA(status), &written, NULL);
+        WriteFile(GetStdHandle(STD_ERROR_HANDLE), "\r\n", 2, &written, NULL);
+    }
     return 1;
 }
 
@@ -1670,12 +1574,25 @@ static int run_smoke(void)
         do_scan();
         if (g_pending != ACTION_NONE || selected_file_type(&type_id) != XXWIDGETS_OK || type_id != 0 ||
             !xxwidgets_scan_panel_count(g_panel)) return smoke_failed(__LINE__);
+        {
+            /* DIE's S and ? columns: detection rows carry them; S opens the script. */
+            size_t node, count = xxwidgets_treeview_count(g_results);
+            xxwidgets_event press = {0};
+            for (node = 0; node < count && !(xxwidgets_treeview_node_marks(g_results, node) & 1u); ++node) {}
+            if (xxwidgets_treeview_mark_count(g_results) != 2 || node == count ||
+                lstrcmpA(xxwidgets_treeview_mark_label(g_results, 0), "S") || lstrcmpA(xxwidgets_treeview_mark_label(g_results, 1), "?") ||
+                !(xxwidgets_treeview_node_marks(g_results, node) & 2u) || xxwidgets_treeview_node_marks(g_results, 0))
+                return smoke_failed(__LINE__);
+            press.type = XXWIDGETS_EVENT_CLICK; press.widget = g_results; press.value = (int)node; press.x = 0;
+            if (!gui_tree_mark_event(g_panel, &press) || !smoke_begin(L"Signature: *", SMOKE_SIGNATURE) ||
+                gui_tree_mark_process(g_window) != NULL || !smoke_finish()) return smoke_failed(__LINE__);
+        }
     }
-    if (!smoke_begin_page(L"Scan", SMOKE_SCAN_CANCEL, 1) || do_settings(OPTIONS_FONTS) != 0 || !smoke_finish() || !g_bFlagDeep ||
+    if (!smoke_begin_page(L"Scan", SMOKE_SCAN_CANCEL, 1) || do_settings(GUI_OPTIONS_FONTS) != 0 || !smoke_finish() || !g_bFlagDeep ||
         gui_backend_get_scan_modes() != GUI_SCAN_OVERLAYS) return smoke_failed(__LINE__);
     if (xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 7u) return smoke_failed(__LINE__);
-    if (!smoke_begin_page(L"Scan", SMOKE_SCAN_OK, 0) || do_settings(OPTIONS_SCAN) != 1 || !smoke_finish() || g_bFlagDeep ||
-        g_optionsPage != OPTIONS_SCAN) return smoke_failed(__LINE__);
+    if (!smoke_begin_page(L"Scan", SMOKE_SCAN_OK, 0) || do_settings(GUI_OPTIONS_SCAN) != 1 || !smoke_finish() || g_bFlagDeep ||
+        g_optionsPage != GUI_OPTIONS_SCAN) return smoke_failed(__LINE__);
     if (gui_backend_get_scan_modes() != (GUI_SCAN_ALL_TYPES | GUI_SCAN_RESOURCES | GUI_SCAN_ARCHIVES) ||
         !gui_backend_set_scan_modes(GUI_SCAN_OVERLAYS)) return smoke_failed(__LINE__);
     if (xxwidgets_scan_panel_get_flags(g_panel, &flags) != XXWIDGETS_OK || flags != 6u ||
@@ -1685,7 +1602,7 @@ static int run_smoke(void)
         gui_backend_optimization_capabilities capabilities;
         if (!gui_backend_get_optimization_options(&before) ||
             !gui_backend_get_optimization_capabilities(&capabilities) ||
-            !smoke_begin_page(L"Optimization", 4, 0) || do_settings(OPTIONS_OPTIMIZATION) != 0 || !smoke_finish() ||
+            !smoke_begin_page(L"Optimization", 4, 0) || do_settings(GUI_OPTIONS_OPTIMIZATION) != 0 || !smoke_finish() ||
             !gui_backend_get_optimization_options(&after) ||
             after.buffer_size != before.buffer_size || after.file_buffer_size != before.file_buffer_size ||
             after.use_sse2 != before.use_sse2 || after.use_avx2 != before.use_avx2 ||
@@ -1693,12 +1610,12 @@ static int run_smoke(void)
             after.use_vpclmulqdq != before.use_vpclmulqdq || after.use_neon != before.use_neon ||
             after.use_arm_crc32 != before.use_arm_crc32 || after.use_arm_crypto != before.use_arm_crypto ||
             after.use_arm_dotprod != before.use_arm_dotprod || after.use_arm_pmull != before.use_arm_pmull) return smoke_failed(__LINE__);
-        if (!smoke_begin_page(L"Optimization", 5, 0) || do_settings(OPTIONS_OPTIMIZATION) != 1 || !smoke_finish() ||
+        if (!smoke_begin_page(L"Optimization", 5, 0) || do_settings(GUI_OPTIONS_OPTIMIZATION) != 1 || !smoke_finish() ||
             !gui_backend_get_optimization_options(&after) ||
             after.buffer_size != 1024 || after.file_buffer_size != 2048 ||
             after.use_sse2 || after.use_avx2 || after.use_sse42 || after.use_aes || after.use_sha || after.use_vpclmulqdq ||
             after.use_neon || after.use_arm_crc32 || after.use_arm_crypto || after.use_arm_dotprod || after.use_arm_pmull) return smoke_failed(__LINE__);
-        if (!smoke_begin_page(L"Optimization", 6, 1) || do_settings(OPTIONS_HEX) != 1 || !smoke_finish() ||
+        if (!smoke_begin_page(L"Optimization", 6, 1) || do_settings(GUI_OPTIONS_HEX) != 1 || !smoke_finish() ||
             !gui_backend_get_optimization_options(&after) ||
             after.buffer_size != 65536 || after.file_buffer_size != 65536 ||
             after.use_sse2 != capabilities.sse2 || after.use_avx2 != capabilities.avx2 ||
@@ -1711,9 +1628,9 @@ static int run_smoke(void)
     {
         xxwidgets_font_options before, after;
         if (xxwidgets_app_get_font_options(g_app, &before) != XXWIDGETS_OK ||
-            !smoke_begin_page(L"Fonts", SMOKE_FONTS_CANCEL, 0) || do_settings(OPTIONS_FONTS) != 0 || !smoke_finish() ||
+            !smoke_begin_page(L"Fonts", SMOKE_FONTS_CANCEL, 0) || do_settings(GUI_OPTIONS_FONTS) != 0 || !smoke_finish() ||
             xxwidgets_app_get_font_options(g_app, &after) != XXWIDGETS_OK || memcmp(&before, &after, sizeof(before))) return smoke_failed(__LINE__);
-        if (!smoke_begin_page(L"Fonts", SMOKE_FONTS_OK, 1) || do_settings(OPTIONS_SCAN) != 1 || !smoke_finish() ||
+        if (!smoke_begin_page(L"Fonts", SMOKE_FONTS_OK, 1) || do_settings(GUI_OPTIONS_SCAN) != 1 || !smoke_finish() ||
             xxwidgets_app_get_font_options(g_app, &after) != XXWIDGETS_OK || !memcmp(&before, &after, sizeof(before))) return smoke_failed(__LINE__);
         {
             xxwidgets_font_options large = after;
@@ -1745,7 +1662,7 @@ static int run_smoke(void)
             {
                 gui_backend_optimization_options optimization_before, optimization_after;
                 if (!gui_backend_get_optimization_options(&optimization_before) ||
-                    !smoke_begin_page(L"Optimization", 4, 0) || do_settings(OPTIONS_OPTIMIZATION) != 0 || !smoke_finish() ||
+                    !smoke_begin_page(L"Optimization", 4, 0) || do_settings(GUI_OPTIONS_OPTIMIZATION) != 0 || !smoke_finish() ||
                     !gui_backend_get_optimization_options(&optimization_after) ||
                     optimization_after.buffer_size != optimization_before.buffer_size ||
                     optimization_after.file_buffer_size != optimization_before.file_buffer_size ||
@@ -1765,7 +1682,7 @@ static int run_smoke(void)
             SetWindowPos(native(g_window), NULL, 0, 0, original.right - original.left,
                 original.bottom - original.top, SWP_NOMOVE | SWP_NOZORDER);
         }
-        if (!smoke_begin_page(L"File", SMOKE_FILE_CANCEL, 0) || do_settings(OPTIONS_FILE) != 0 || !smoke_finish()) return smoke_failed(__LINE__);
+        if (!smoke_begin_page(L"File", SMOKE_FILE_CANCEL, 0) || do_settings(GUI_OPTIONS_FILE) != 0 || !smoke_finish()) return smoke_failed(__LINE__);
     }
     if (!smoke_begin(L"File Information", 7)) return smoke_failed(__LINE__);
     do_file_information();
@@ -1827,7 +1744,7 @@ static int run_smoke(void)
             if (original_path) xx_str_free(original_path);
             return smoke_failed(__LINE__);
         }
-        do_settings(OPTIONS_SIGNATURES);
+        do_settings(GUI_OPTIONS_SIGNATURES);
         changed = lstrcmpA(original_path, gui_backend_main_db_path());
         xx_str_free(original_path);
         if (!smoke_finish() || changed) return smoke_failed(__LINE__);
@@ -1930,13 +1847,28 @@ int gui_run(void)
     if (g_minWindowWidth > 850 || g_minWindowHeight > 580)
         SetWindowPos(native(g_window), NULL, 0, 0, g_minWindowWidth > 850 ? g_minWindowWidth : 850,
                      g_minWindowHeight > 580 ? g_minWindowHeight : 580, SWP_NOMOVE | SWP_NOZORDER);
-    if (gui_backend_init()) {
-        cdie_translation_swprintf(ready, sizeof(ready)/sizeof(ready[0]), CDIE_N_(L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan."),
-                  gui_backend_signature_count());
-        set_status_wide(ready);
-    } else {
-        xxwidgets_widget_set_text(g_status,
-            CDIE_TR("Main signature database not found. Use Options > Signatures to select the database folder."));
+    (void)gui_backend_init();
+    {
+        /* Stored Options apply before the first scan; smoke tests keep them in memory. */
+        gui_options_values values;
+        int stored = 1, databases = 1;
+        g_settings = gui_settings_open(smoke, &stored);
+        status = current_options(&values);
+        if (status == XXWIDGETS_OK) databases = gui_settings_load(g_settings, &values, &g_optionsPage);
+        if (gui_backend_signature_count()) {
+            cdie_translation_swprintf(ready, sizeof(ready)/sizeof(ready[0]), CDIE_N_(L"Ready. %d signatures loaded. Choose a file or drag one here, then press Scan."),
+                      gui_backend_signature_count());
+            set_status_wide(ready);
+        } else {
+            xxwidgets_widget_set_text(g_status,
+                CDIE_TR("Main signature database not found. Use Options > Signatures to select the database folder."));
+        }
+        if (!databases)
+            xxwidgets_widget_set_text(g_status, CDIE_TR("The saved signature folders cannot be loaded; the default ones are active."));
+        else if (!stored)
+            xxwidgets_widget_set_text(g_status, CDIE_TR("Saved options cannot be read; the defaults are used."));
+        if (status == XXWIDGETS_OK) status = apply_options(&values);
+        if (status != XXWIDGETS_OK) report_ui_error("Apply saved options", status);
     }
     status = refresh_panel_tags();
     if (status != XXWIDGETS_OK) report_ui_error("Load signature tags", status);
@@ -1952,6 +1884,10 @@ int gui_run(void)
         status = xxwidgets_app_poll(g_app, 30);
         if (status != XXWIDGETS_OK) { result = 1; break; }
         if (!g_running) break;
+        {
+            const char *message = gui_tree_mark_process(g_window);
+            if (message) xxwidgets_widget_set_text(g_status, message);
+        }
         action = g_pending; g_pending = ACTION_NONE;
         /* All modal loops and scans start after returning from app_poll. */
         switch (action) {
@@ -1959,7 +1895,7 @@ int gui_run(void)
         case ACTION_BROWSE: do_browse(); break;
         case ACTION_OPTIONS: do_settings(g_optionsPage); break;
         case ACTION_ABOUT: do_about(); break;
-        case ACTION_DATABASE_PATHS: do_settings(OPTIONS_SIGNATURES); break;
+        case ACTION_DATABASE_PATHS: do_settings(GUI_OPTIONS_SIGNATURES); break;
         case ACTION_FILE_INFORMATION: do_file_information(); break;
         case ACTION_ENTROPY: do_entropy(); break;
         case ACTION_HASH: do_hash(); break;
@@ -1980,6 +1916,9 @@ int gui_run(void)
     }
 finish:
     if (g_smokeTimer) KillTimer(NULL, g_smokeTimer);
+    gui_settings_close(g_settings);
+    g_settings = NULL;
+    gui_tree_reset();
     gui_backend_shutdown();
     if (g_about && xxwidgets_about_dialog_destroy(g_about) != XXWIDGETS_OK) result = 1;
     g_about = NULL;

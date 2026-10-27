@@ -20,6 +20,7 @@ if(APPLE)
     add_custom_command(TARGET cdie_gui POST_BUILD
         COMMAND "${CMAKE_COMMAND}"
             "-DDATABASE_DIR=${CDIE_DATABASE_DIR}"
+            "-DINFO_DIR=${CDIE_INFO_DIR}"
             "-DRESOURCES_DIR=$<TARGET_BUNDLE_CONTENT_DIR:cdie_gui>/Resources"
             "-DCDIE_SOURCE_DIR=${CMAKE_CURRENT_LIST_DIR}/../.."
             "-DCDISASM_DIR=${XXFC_CDISASM_DIR}"
@@ -37,9 +38,16 @@ else()
     target_link_libraries(cdie_gui PRIVATE PkgConfig::CDIE_GTK3 m)
     cdie_stage_frontend_resources(cdie_gui)
 endif()
-target_sources(cdie_gui PRIVATE gui_png.c gui_tree.c gui_result_tree.c gui_scan_options.c gui_file_information.c gui_entropy.c gui_hash.c gui_strings.c gui_hex_view.c gui_disasm.c gui_memory_map.c gui_imports.c gui_exports.c gui_resources.c gui_symbols.c ../app/cdie_symbols.c ../app/cdie_resources.c ../app/cdie_exports.c ../app/cdie_imports.c ../app/cdie_memory_map.c ../app/cdie_disasm.c ../app/cdie_strings.c ../app/cdie_hash.c ../app/cdie_entropy.c ../app/cdie_file_info.c)
+# The About picture, embedded for every platform.
+add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c"
+    COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_LIST_DIR}/images/about.png"
+        "-DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c" -DNAME=cdie_about_png
+        -P "${CMAKE_CURRENT_LIST_DIR}/embed_file.cmake"
+    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/images/about.png" "${CMAKE_CURRENT_LIST_DIR}/embed_file.cmake"
+    VERBATIM)
+target_sources(cdie_gui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c" gui_about.c gui_options.c gui_settings.c gui_png.c gui_tree.c gui_result_tree.c gui_scan_options.c gui_file_information.c gui_entropy.c gui_hash.c gui_strings.c gui_hex_view.c gui_disasm.c gui_memory_map.c gui_imports.c gui_exports.c gui_resources.c gui_symbols.c ../app/cdie_symbols.c ../app/cdie_resources.c ../app/cdie_exports.c ../app/cdie_imports.c ../app/cdie_memory_map.c ../app/cdie_disasm.c ../app/cdie_strings.c ../app/cdie_hash.c ../app/cdie_entropy.c ../app/cdie_file_info.c)
 target_include_directories(cdie_gui PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdisasm::cdisasm)
+target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdie_settings cdisasm::cdisasm)
 
 if(MSVC)
     # The application resource owns the common-controls and DPI manifest.
@@ -67,5 +75,5 @@ if(CDIE_BUILD_TESTS AND UNIX AND NOT APPLE)
     list(REMOVE_ITEM _cdie_gui_test_sources main_gui_linux.c)
     add_executable(cdie_test_linux_settings ../../tests/gui_linux_settings.c ${_cdie_gui_test_sources})
     target_include_directories(cdie_test_linux_settings PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-    target_link_libraries(cdie_test_linux_settings PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdisasm::cdisasm PkgConfig::CDIE_GTK3 m)
+    target_link_libraries(cdie_test_linux_settings PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdie_settings cdisasm::cdisasm PkgConfig::CDIE_GTK3 m)
 endif()

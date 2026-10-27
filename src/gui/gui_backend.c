@@ -31,7 +31,11 @@
 
 #include "../global.h"
 #include <xxfclib/die_engine/die_engine.h>
+#include <xxfclib/die_engine/die_engine_debug.h>
+#include <xxfclib/js/xx_js.h>
+#include <xxfclib/buf/xx_buf.h>
 #include <xxfclib/fs/xx_fs.h>
+#include <xxfclib/strings/xx_string.h>
 #include <xxfclib/global/xx_global.h>
 #include <xxfclib/rt/xx_rt.h>
 
@@ -172,6 +176,13 @@ static int gui_same_db_path(const char *pPath, const char *pDefaultName, const c
     bSame = *pLeft == *pRight;
     xx_rt_free(pResolved);
     return bSame;
+}
+
+int gui_backend_db_path_is_default(int nIndex)
+{
+    static const char *const names[3] = {"db", "db_extra", "db_custom"};
+    const char *current = nIndex == 0 ? g_options.main_database_path : nIndex == 1 ? g_options.extra_database_path : g_options.custom_database_path;
+    return g_bInited && nIndex >= 0 && nIndex < 3 && gui_same_db_path("", names[nIndex], current);
 }
 
 int gui_backend_db_paths_current(const char *pMain, const char *pExtra, const char *pCustom)
@@ -456,6 +467,157 @@ scan_allocation_failed:
     xx_rt_free(pTypeName);
     xx_scan_result_free(&result);
     return 0;
+}
+
+static const DBSignature *find_signature(const char *signature)
+{
+    int i;
+    if (!g_bInited || !signature || !signature[0]) return NULL;
+    for (i = 0; i < g_db.nCount; ++i) {
+        const DBSignature *record = &g_db.pRecords[i];
+        const char *path = record->pFilePath && record->pFilePath[0] ? record->pFilePath : record->pName;
+        if (path && !xx_rt_strcmp(path, signature)) return record;
+    }
+    return NULL;
+}
+
+char *gui_backend_signature_source(const char *signature)
+{
+    const DBSignature *record = find_signature(signature);
+    char *source;
+    if (!record || !record->pText || js_is_bytecode(record->pText, record->nSize)) return NULL;
+    source = (char *)xx_rt_malloc(record->nSize + 1);
+    if (!source) return NULL;
+    xx_rt_memcpy(source, record->pText, record->nSize);
+    source[record->nSize] = 0;
+    return source;
+}
+
+static void append_log(const char *text, void *user)
+{
+    xx_buf_append_str((xx_buf_t *)user, text);
+}
+
+int gui_backend_run_signature(const char *path, int type_id, const char *signature, const char *source, char **text)
+{
+    xx_scan_options options;
+    xx_scan_result result;
+    die_engine_debug_config config;
+    xx_buf_t log, out;
+    char *detected;
+    int ok, i;
+    if (text) *text = NULL;
+    if (!g_bInited || !path || !path[0] || !source || !text || type_id < 0 || type_id >= XFT_COUNT ||
+        (type_id && !gui_concrete_file_type((XFileType)type_id)))
+        return 0;
+    xx_buf_init(&log);
+    xx_buf_init(&out);
+    xx_rt_memset(&config, 0, sizeof(config));
+    config.size = sizeof(config);
+    config.version = DIE_ENGINE_DEBUG_VERSION;
+    config.log = append_log;
+    config.log_user = &log;
+    config.signature_source = source;
+    config.signature_name = signature;
+    /* One input, as the debugger requires: no child scans of its parts. */
+    options = g_options;
+    options.recursive_scan = false;
+    options.all_types_scan = false;
+    options.overlay_scan = false;
+    options.resources_scan = false;
+    options.archives_scan = false;
+    ok = die_engine_scan_file_type_debug_pd(path, &g_db, &options, (XFileType)type_id, &result, NULL, &config);
+    detected = ok ? xx_scan_format_text(&result, &options) : NULL;
+    if (detected) { xx_buf_append_str(&out, detected); xx_rt_free(detected); }
+    for (i = 0; i < result.nErrorCount; ++i)
+        if (result.ppErrors && result.ppErrors[i]) xx_buf_appendf(&out, "%s\n", result.ppErrors[i]);
+    if (log.size) {
+        if (out.size && out.data[out.size - 1] != '\n') xx_buf_append_str(&out, "\n");
+        xx_buf_append(&out, log.data, log.size);
+    }
+    xx_scan_result_free(&result);
+    xx_buf_free(&log);
+    *text = xx_buf_detach(&out, NULL);
+    return ok;
+}
+
+/* <dir>/info/html/<name>.html for the directory the main database is in, the
+ * executable's and, in a macOS bundle, Resources. */
+static char *read_info(const char *dir, const char *file)
+{
+    char *info = xx_fs_path_join(dir, "info"), *html = info ? xx_fs_path_join(info, "html") : NULL;
+    char *path = html ? xx_fs_path_join(html, file) : NULL, *data = NULL;
+    if (path && xx_fs_is_file(path)) data = xx_fs_read_file(path, NULL);
+    xx_rt_free(info); xx_rt_free(html); xx_rt_free(path);
+    return data;
+}
+
+/* The descriptions are short HTML or plain text: drop tags, keep paragraph
+ * breaks and decode the common entities. */
+static char *info_plain_text(const char *html)
+{
+    xx_buf_t out;
+    const char *s = html;
+    xx_buf_init(&out);
+    while (*s) {
+        if (*s == '<') {
+            const char *end = s + 1;
+            while (*end && *end != '>') ++end;
+            if ((end - s >= 3 && (s[1] == 'b' || s[1] == 'B') && (s[2] == 'r' || s[2] == 'R')) ||
+                (end - s >= 2 && (s[1] == 'p' || s[1] == 'P')) || (end - s >= 3 && s[1] == '/' && (s[2] == 'p' || s[2] == 'P')))
+                xx_buf_append_str(&out, "\n");
+            s = *end ? end + 1 : end;
+        } else if (*s == '&') {
+            static const struct { const char *entity, *text; } entities[] = {
+                {"&amp;", "&"}, {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}, {"&#39;", "'"}, {"&nbsp;", " "}};
+            size_t k;
+            for (k = 0; k < sizeof(entities) / sizeof(entities[0]); ++k) {
+                size_t length = xx_rt_strlen(entities[k].entity);
+                if (!xx_rt_strncmp(s, entities[k].entity, length)) { xx_buf_append_str(&out, entities[k].text); s += length; break; }
+            }
+            if (k == sizeof(entities) / sizeof(entities[0])) { xx_buf_append_char(&out, *s); ++s; }
+        } else if (*s != '\r') {
+            xx_buf_append_char(&out, *s); ++s;
+        } else ++s;
+    }
+    return xx_buf_detach(&out, NULL);
+}
+
+char *gui_backend_info_text(const char *name)
+{
+    char *file, *data = NULL, *text;
+    const char *s;
+    if (!name || !name[0]) return NULL;
+    /* A name is a file name here, never a path. */
+    for (s = name; *s; ++s)
+        if (*s == '/' || *s == '\\' || *s == ':' || (unsigned char)*s < 32) return NULL;
+    if (!xx_rt_strcmp(name, ".") || !xx_rt_strcmp(name, "..")) return NULL;
+    file = (char *)xx_rt_malloc(xx_rt_strlen(name) + 6);
+    if (!file) return NULL;
+    xx_rt_memcpy(file, name, xx_rt_strlen(name));
+    xx_rt_memcpy(file + xx_rt_strlen(name), ".html", 6);
+    if (g_options.main_database_path) {
+        char *parent = xx_fs_path_join(g_options.main_database_path, "..");
+        if (parent) data = read_info(parent, file);
+        xx_rt_free(parent);
+    }
+    if (!data) {
+        char *app = cdie_app_dir();
+        if (app) data = read_info(app, file);
+#if defined(__APPLE__)
+        if (!data && app) {
+            char *resources = xx_fs_path_join(app, "../Resources");
+            if (resources) data = read_info(resources, file);
+            xx_rt_free(resources);
+        }
+#endif
+        xx_rt_free(app);
+    }
+    xx_rt_free(file);
+    if (!data) return NULL;
+    text = info_plain_text(data);
+    xx_str_free(data);
+    return text;
 }
 
 int gui_backend_scan_results_type(const char *path, int type_id, gui_backend_result_fn callback,

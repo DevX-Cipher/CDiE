@@ -8,9 +8,8 @@
 /* 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID, 24 = RT_MANIFEST. */
 1 24 "cdie_gui.manifest"
 
-/* Detect It Easy icon and the About picture (PNG, decoded at run time). */
+/* Detect It Easy icon. */
 IDI_CDIE ICON "images/main.ico"
-IDR_ABOUT_IMAGE RCDATA "images/about.png"
 
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 4, 0, 0, 0

@@ -27,6 +27,5 @@
 
 /* The lowest icon id is the executable icon Explorer shows. */
 #define IDI_CDIE         1
-#define IDR_ABOUT_IMAGE  300
 
 #endif /* CDIE_GUI_RESOURCE_H */

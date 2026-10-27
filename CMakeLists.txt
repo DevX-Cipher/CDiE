@@ -275,6 +275,17 @@ if(NOT CDIE_DATABASE_DIR)
     endif()
 endif()
 
+# Descriptions the result tree's "?" button shows (XInfoDB info/html/<name>.html).
+set(CDIE_INFO_DIR "" CACHE PATH "Directory holding html/ with detection descriptions (XInfoDB info)")
+if(NOT CDIE_INFO_DIR)
+    foreach(_info "${CMAKE_CURRENT_LIST_DIR}/dep/XInfoDB/info" "${CMAKE_CURRENT_LIST_DIR}/../_mylibs/XInfoDB/info")
+        if(EXISTS "${_info}/html")
+            get_filename_component(CDIE_INFO_DIR "${_info}" ABSOLUTE)
+            break()
+        endif()
+    endforeach()
+endif()
+
 file(GLOB CDIE_TRANSLATION_CATALOGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/translations/*.po")
 add_subdirectory(src)
 
@@ -376,6 +387,12 @@ if(CDIE_DATABASE_DIR AND (NOT CDIE_DATABASE_DIR STREQUAL "NONE") AND EXISTS "${C
     endforeach()
 else()
     message(STATUS "cdie: no signature database packaged (set CDIE_DATABASE_DIR to bundle one)")
+endif()
+
+# The "?" descriptions sit beside the databases, where the frontends look.
+if(CDIE_INFO_DIR AND (NOT CDIE_INFO_DIR STREQUAL "NONE") AND EXISTS "${CDIE_INFO_DIR}/html")
+    install(DIRECTORY "${CDIE_INFO_DIR}/html/" DESTINATION "${CDIE_DATABASE_DESTINATION}/info/html"
+        FILES_MATCHING PATTERN "*.html")
 endif()
 
 # -------------------------------------------------------------------- CPack
