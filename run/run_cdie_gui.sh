@@ -23,9 +23,10 @@ OUT="$ROOT/build_linux"
 CC="${CC:-gcc}"
 
 command -v "$CC" >/dev/null 2>&1 || { echo "ERROR: $CC not found."; exit 1; }
-command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gtk+-3.0 || {
-    echo "ERROR: GTK 3 development files not found."
-    echo "  Debian/Ubuntu: sudo apt install build-essential cmake ninja-build pkg-config libgtk-3-dev"
+PKGS="gtk+-3.0 ayatana-appindicator3-0.1 libnotify"
+command -v pkg-config >/dev/null 2>&1 && pkg-config --exists $PKGS || {
+    echo "ERROR: GTK 3 / appindicator / libnotify development files not found."
+    echo "  Debian/Ubuntu: sudo apt install build-essential cmake ninja-build pkg-config libgtk-3-dev libayatana-appindicator3-dev libnotify-dev"
     exit 1
 }
 
@@ -95,7 +96,7 @@ done < <(find "$SRC" -type f -name '*.c' | sort)
 
 while IFS= read -r f; do
     case "$f" in
-	*/main_gui.c|*/platform_win32.c) continue ;;
+	*/main_gui.c|*/platform_win32.c|*/tray_win32.c) continue ;;
     esac
     SOURCES+=("$f")
 done < <(find "$GUI" -type f -name '*.c' | sort)
@@ -103,12 +104,12 @@ done < <(find "$GUI" -type f -name '*.c' | sort)
 echo "[1/1] cdie_gui ($CC, ${#SOURCES[@]} sources)..."
 # shellcheck disable=SC2046
 "$CC" -O2 -Wall -DNDEBUG -DXXWIDGETS_STATIC -DXXFC_STATIC \
-    $(pkg-config --cflags gtk+-3.0) \
+    $(pkg-config --cflags $PKGS) \
     -I"$SRC" -I"$GUI" -I"$XXW_INC" -I"$XXF_INC" \
     "${SOURCES[@]}" \
     -o "$OUT/cdie_gui" \
     "$XXW_LIB" "$XXF_LIB" ${CDIS_LIB:+"$CDIS_LIB"} \
-    $(pkg-config --libs gtk+-3.0) -lm -lpthread -ldl
+       $(pkg-config --libs $PKGS) -lm -lpthread -ldl
 
 echo
 echo "Built: $OUT/cdie_gui"

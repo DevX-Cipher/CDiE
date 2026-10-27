@@ -34,6 +34,8 @@
 #include "panels/signatures.h"
 #include "panels/strings.h"
 #include "xxwidgets/xxwidgets.h"
+#include "core/tray.h"
+#include "core/dlwatch.h"
 
 static GtkWidget* g_win;
 static GtkWidget* g_sw;
@@ -330,7 +332,7 @@ static void do_options(void)
     GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
     "_Database paths...", GTK_RESPONSE_APPLY,
     "_Cancel", GTK_RESPONSE_CANCEL, "_OK", GTK_RESPONSE_ACCEPT, NULL);
-  GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6), * chk[8];
+  GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6), * chk[8], * chkMon;
   int i, resp;
 
   gtk_container_set_border_width(GTK_CONTAINER(box), 12);
@@ -339,6 +341,9 @@ static void do_options(void)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chk[i]), *rows[i].var);
     gtk_box_pack_start(GTK_BOX(box), chk[i], FALSE, FALSE, 0);
   }
+  chkMon = gtk_check_button_new_with_label("Monitor downloads");
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(chkMon), dlwatch_enabled());
+  gtk_box_pack_start(GTK_BOX(box), chkMon, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dlg))), box, TRUE, TRUE, 0);
   gtk_widget_show_all(dlg);
 
@@ -349,9 +354,43 @@ static void do_options(void)
     for (i = 0; i < 8; ++i)
       *rows[i].var = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chk[i]));
     apply_flags_to_backend();
+    if (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(chkMon)) != (dlwatch_enabled() != 0))
+      dlwatch_set_enabled(!dlwatch_enabled());
     set_status("Options applied to the next scan. Use Database paths to choose signature folders.");
   }
   gtk_widget_destroy(dlg);
+}
+
+/* ---- tray / download monitor glue ---- */
+static void on_tray_exit(void* user) { (void)user; gtk_widget_destroy(g_win); }
+
+static void win_show(void* u)
+{
+  (void)u;
+  gtk_widget_show(g_win);
+  gtk_window_deiconify(GTK_WINDOW(g_win));
+  gtk_window_present(GTK_WINDOW(g_win));
+}
+static void win_hide(void* u) { (void)u; gtk_widget_hide(g_win); }
+static int  win_is_visible(void* u) { (void)u; return gtk_widget_get_visible(g_win); }
+
+static void mon_request_scan(const char* path, void* u) { (void)u; do_scan(path); }
+static void mon_set_status(const char* text, void* u) { (void)u; set_status(text); }
+static void mon_restore_flags(void* u) { (void)u; apply_flags_to_backend(); }
+
+static gboolean on_delete(GtkWidget* w, GdkEvent* e, gpointer u)
+{
+  (void)w; (void)e; (void)u;
+  return tray_intercept_close() ? TRUE : FALSE;     /* TRUE = don't close, we hid it */
+}
+
+static gboolean on_window_state(GtkWidget* w, GdkEventWindowState* e, gpointer u)
+{
+  (void)w; (void)u;
+  if ((e->changed_mask & GDK_WINDOW_STATE_ICONIFIED) &&
+    (e->new_window_state & GDK_WINDOW_STATE_ICONIFIED))
+    tray_intercept_minimize();
+  return FALSE;
 }
 
 static gboolean idle_browse(gpointer u) { (void)u; do_browse(); return G_SOURCE_REMOVE; }
@@ -389,6 +428,10 @@ static gboolean on_key_press(GtkWidget* w, GdkEventKey* e, gpointer u)
   (void)w; (void)u;
   if (e->keyval == GDK_KEY_F5) { if (g_lastPath) { char* p = g_strdup(g_lastPath); do_scan(p); g_free(p); } return TRUE; }
   if (e->keyval == GDK_KEY_F1) { do_about(); return TRUE; }
+  if (ctrl && !shift && (e->keyval == GDK_KEY_m || e->keyval == GDK_KEY_M)) {
+    dlwatch_set_enabled(!dlwatch_enabled());
+    return TRUE;
+  }
   if (ctrl && !shift && (e->keyval == GDK_KEY_o || e->keyval == GDK_KEY_O)) { do_browse(); return TRUE; }
   if (ctrl && !shift && (e->keyval == GDK_KEY_r || e->keyval == GDK_KEY_R)) { do_report(); return TRUE; }
   if (ctrl && shift && (e->keyval == GDK_KEY_d || e->keyval == GDK_KEY_D)) { do_database_paths(); return TRUE; }
@@ -453,9 +496,11 @@ int gui_run(void)
   gtk_widget_set_size_request(win, 900, 540);
   g_signal_connect(win, "destroy", G_CALLBACK(gtk_main_quit), NULL);
   g_signal_connect(win, "key-press-event", G_CALLBACK(on_key_press), NULL);
+	g_signal_connect(win, "delete-event", G_CALLBACK(on_delete), NULL);
+	g_signal_connect(win, "window-state-event", G_CALLBACK(on_window_state), NULL);
 
   {
-    GtkCssProvider* css = gtk_css_provider_new();
+    GtkCssProvider* css = gtk_css_provider_new(); 
     gtk_css_provider_load_from_data(css,
       "window, scrolledwindow, viewport { background-color: #1F212E; }", -1, NULL);
     gtk_style_context_add_provider_for_screen(gdk_screen_get_default(),
@@ -498,9 +543,24 @@ int gui_run(void)
   }
   apply_flags_to_backend();
 
+  tray_init(on_tray_exit, NULL);
+  {
+    TrayWindowOps ops = { win_show, win_hide, win_is_visible, NULL };
+    DlWatchHost mh;
+    tray_set_window_ops(&ops);
+    memset(&mh, 0, sizeof(mh));
+    mh.request_scan = mon_request_scan;
+    mh.set_status = mon_set_status;
+    mh.restore_flags = mon_restore_flags;
+    dlwatch_init(&mh);
+  }
+  tray_set_callbacks(dlwatch_balloon_click, NULL, dlwatch_menu_toggle, NULL);
+
   gtk_widget_show_all(win);
   gtk_main();
 
+  dlwatch_shutdown();
+  tray_remove();
   gui_backend_shutdown();
   g_free(g_lastPath);
   g_free(g_lastReport);
