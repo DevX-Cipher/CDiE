@@ -16,6 +16,7 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.ntinfo.cdie"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${CDIE_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${CDIE_VERSION}")
+    set_property(TARGET cdie_gui APPEND PROPERTY LINK_DEPENDS ${CDIE_TRANSLATION_CATALOGS})
     add_custom_command(TARGET cdie_gui POST_BUILD
         COMMAND "${CMAKE_COMMAND}"
             "-DDATABASE_DIR=${CDIE_DATABASE_DIR}"
@@ -24,14 +25,21 @@ if(APPLE)
             "-DCDISASM_DIR=${XXFC_CDISASM_DIR}"
             -P "${CMAKE_CURRENT_LIST_DIR}/bundle_resources.cmake"
         VERBATIM)
-else()
+elseif(WIN32)
     add_executable(cdie_gui WIN32
         ${CDIE_LIB_SOURCES} gui_backend.c main_gui.c gui_entry.c cdie_gui.rc)
+    cdie_stage_frontend_translations(cdie_gui)
     target_link_libraries(cdie_gui PRIVATE user32 gdi32 comdlg32 comctl32 shell32 ole32)
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CDIE_GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0>=3.16)
+    add_executable(cdie_gui ${CDIE_LIB_SOURCES} gui_backend.c main_gui_linux.c)
+    target_link_libraries(cdie_gui PRIVATE PkgConfig::CDIE_GTK3 m)
+    cdie_stage_frontend_resources(cdie_gui)
 endif()
-target_sources(cdie_gui PRIVATE gui_tree.c gui_result_tree.c)
+target_sources(cdie_gui PRIVATE gui_png.c gui_tree.c gui_result_tree.c gui_scan_options.c gui_file_information.c gui_entropy.c gui_hash.c gui_strings.c gui_hex_view.c gui_disasm.c gui_memory_map.c gui_imports.c gui_exports.c gui_resources.c gui_symbols.c ../app/cdie_symbols.c ../app/cdie_resources.c ../app/cdie_exports.c ../app/cdie_imports.c ../app/cdie_memory_map.c ../app/cdie_disasm.c ../app/cdie_strings.c ../app/cdie_hash.c ../app/cdie_entropy.c ../app/cdie_file_info.c)
 target_include_directories(cdie_gui PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
-target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets)
+target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdisasm::cdisasm)
 
 if(MSVC)
     # The application resource owns the common-controls and DPI manifest.
@@ -53,3 +61,11 @@ if(MSVC)
 endif()
 
 install(TARGETS cdie_gui BUNDLE DESTINATION "." RUNTIME DESTINATION ".")
+
+if(CDIE_BUILD_TESTS AND UNIX AND NOT APPLE)
+    get_target_property(_cdie_gui_test_sources cdie_gui SOURCES)
+    list(REMOVE_ITEM _cdie_gui_test_sources main_gui_linux.c)
+    add_executable(cdie_test_linux_settings ../../tests/gui_linux_settings.c ${_cdie_gui_test_sources})
+    target_include_directories(cdie_test_linux_settings PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
+    target_link_libraries(cdie_test_linux_settings PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdisasm::cdisasm PkgConfig::CDIE_GTK3 m)
+endif()

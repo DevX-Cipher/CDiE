@@ -3,6 +3,10 @@
 add_executable(cdie
     ${CDIE_SOURCES}
     ${CMAKE_CURRENT_LIST_DIR}/main_console.c
+    ${CMAKE_CURRENT_LIST_DIR}/../app/cdie_file_info.c
+    ${CMAKE_CURRENT_LIST_DIR}/../app/cdie_entropy.c
+    ${CMAKE_CURRENT_LIST_DIR}/../app/cdie_hash.c
+    ${CMAKE_CURRENT_LIST_DIR}/../app/cdie_strings.c
 )
 
 target_include_directories(cdie PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)

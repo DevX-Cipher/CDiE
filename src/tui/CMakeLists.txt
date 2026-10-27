@@ -3,9 +3,10 @@ add_executable(cdie_tui
     main_tui.c
     ../gui/gui_backend.c
     ../gui/gui_tree.c
+    ../gui/gui_scan_options.c
     ../gui/gui_result_tree.c)
 target_include_directories(cdie_tui PRIVATE "${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_CURRENT_LIST_DIR}/../gui")
-target_link_libraries(cdie_tui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets)
+target_link_libraries(cdie_tui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation)
 if(MSVC)
     target_compile_options(cdie_tui PRIVATE /utf-8)
     if(CDIE_NO_CRT AND NOT BUILD_SHARED_LIBS)

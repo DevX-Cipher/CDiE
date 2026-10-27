@@ -23,10 +23,10 @@ each item lists what a script sees instead.
 | ZIP / JAR / APK / NPM / IPA | central-directory record-name list for `isArchiveRecordPresent` / `isArchiveRecordPresentExp`; `META-INF/MANIFEST.MF` decompressed for `getManifestRecord`; and `package/package.json` for `getPackageJsonRecord` (top-level string fields) |
 | `Util` 64-bit arithmetic | `div64`, `divu64`, `shlu64`, `shru64` are implemented (the database uses them because JS numbers are doubles) |
 | NE, LE/LX, CFBF, RAR, JavaClass, Amiga | **detected** by magic so the file type line is right, but no dedicated parser: their database directories run against the generic `Binary` API (plus `MSDOS.isNE/isLE/isLX` for the NE/LE/LX family) |
-| Archive recursion (scanning files inside ZIP/RAR/CAB, or DEX inside an APK) | not implemented — only the manifest members are read, not arbitrary nested files |
+| Archive member scanning | `--archivesscan` enables one level of ZIP-family, LHA, GZIP and BZIP2 member scans plus Mach-O Fat slices. Nested recursion and RAR/CAB member expansion are not exposed by this scan path. |
 | `--verbose` "Operation system" line | reproduced for PE, DEX (`Android(9.0)[Dalvik, 32-bit]`), Mach-O (`macOS(13.0.0)[X86_64, 64-bit]`), NE (`Windows[286, 16SEG]`) and ELF (`Ubuntu Linux(22.04.3, ABI: 3.2.0)[AMD64, 64-bit]`, `Unix[MIPS, 32-bit]` — OSABI/interpreter/`.comment` distro/GNU-note ABI/e_machine arch). The exotic ELF distro/note branches are ported from the reference but validated only on the available samples (Unix, Ubuntu, GNU-note) |
 | PDF streams | not decompressed — key/value queries read the plaintext object dictionaries, which is where the database looks; `/Filter` is reported, but stream contents are not searched |
-| UTF-8 / UTF-16 text detection | `isUTF8Text()` and `isUnicodeText()` return `false`; `getHeaderString()` returns `""`. `isText()` therefore reports only what `isPlainText()` finds |
+| UTF-8 / UTF-16 text detection | `isUTF8Text()`, `isUnicodeText()` and `getHeaderString()` are implemented in xxfclib; the previous stub limitation no longer applies. |
 
 The scan driver picks the same preferred file type as the reference engine,
 so a PE file is scanned with the `PE` database, an ELF file with `ELF`, and
@@ -142,28 +142,221 @@ worth stating outright:
   `x_dtoa_fixed` and `x_dtoa_precision`. New code that wants to print a
   `double` must call one of those.
 
+## GUI Hex View
+
+Hex View is a read-only file browser in the Windows/macOS GUI. It reuses the
+shared hex control with 64 KiB windows, 64-bit physical offsets, Go/paging,
+Refresh, selection, encoding and row-width controls, copying and byte export.
+ASCII/UTF-8/UTF-16LE/BE are exposed in its toolbar; additional existing numeric
+and display functions remain those of the underlying widget. The app opens
+the input `rb`; source editing is unavailable. It requires a known-size seekable
+device and does not expose process-memory or non-seekable streams. Read/parse
+failures retain the previous bytes. Byte/text clipboard selections are capped
+at 1 MiB; streamed Save selection can export larger ranges. No console Hex View
+command is added. Native chooser/clipboard availability depends on the backend.
+
+## GUI Disasm
+
+Disasm is a read-only linear decoder for x86 16/32/64-bit and, by default,
+ARM32, Thumb and AArch64. `CDIE_DISASM_ARM=OFF` omits ARM modes (private assembly
+test builds still enable them). Other architectures, symbols, control-flow
+analysis, execution, editing and console disassembly are unavailable.
+Auto uses native PE, ELF and thin Mach-O headers; raw/unsupported files require
+manual mode selection. Big-endian ARM also requires an explicit instruction
+byte order; container byte order can differ. Mach-O Fat slices are not selected.
+Instructions unavailable in the configured decoder are shown as single-byte
+`db` rows along with invalid/truncated input.
+
+Go uses physical offsets. Mapped virtual addresses are shown in the table;
+unmapped rows use physical offsets instead. Metadata is detected only on open.
+Refresh reloads bounded page bytes and size, but changed headers require
+reopening. A failed read or an offset beyond a shrunken file retains the previous
+page; Go to a valid offset or reopen to recover. History retains at most 256
+page starts. Clipboard availability is backend-dependent. Native Windows/macOS
+runtime validation requires those hosts; shared controls are exercised through
+the terminal backend locally.
+
+## GUI Memory Map
+
+Memory Map shows the native default mapping of a file: PE sections, ELF segments
+and thin Mach-O segments. It does not offer alternate map modes, Mach-O Fat
+slice selection, archive-member expansion, process-memory inspection or access
+permissions. Other/unrecognized inputs (including headers rejected by native
+validation) have a flat unmapped Data region. An empty raw file has no rows.
+Native parsing failures after recognition, invalid ranges and maps over 1024
+records fail without returning a partial snapshot.
+
+The table preserves order, overlap, virtual-only and invisible records. Offset
+lookup selects the first physical interval; address lookup also includes virtual
+tails. Both are half-open and first-match. Unknown addresses and absent physical
+offsets are shown as `-`; there is no inferred VA for flat Data. Snapshot names
+are escaped from fixed-width native byte strings. Reopen after file changes;
+live refresh is not provided. Clipboard availability depends on the backend.
+The viewer is read-only and has no new console command.
+
+## GUI Imports
+
+Imports supports native PE, ELF and thin Mach-O. Supported executables without
+imports display an empty table; unsupported/raw files and Mach-O Fat report an
+unsupported-format error. PE includes ordinary and delay-load tables, names,
+ordinals and IAT slot locations. Displayed PE addresses identify slots; resolved
+function addresses are not available from this view.
+
+ELF uses named undefined global/weak symbols in DYNSYM, or SYMTAB for relocatable
+objects. Sectionless ELF dynamic tables and version metadata are not enumerated.
+Library associations and import slot locations stay unknown. Mach-O uses
+undefined external nlist symbols, with ordinary library ordinals mapped to
+dylib basenames. Common/local/debug/defined symbols are excluded. Dyld bind
+streams, chained fixups and slot locations are not enumerated; a file relying
+only on those mechanisms can therefore show an empty list.
+
+All names escape control/non-ASCII bytes as `\xNN`. The snapshot is limited to
+10,000 records, 16 KiB per displayed name and 8 MiB of aggregate NUL-inclusive
+names. Bound violations and failed/cancelled reads return no partial model.
+Filter is an ASCII-case-insensitive substring match in library/name with a
+256-byte input limit; it selects the first visible row. TSV export of visible
+rows is capped at 32 MiB and includes full names, hints and offsets. Hints are
+meaningful for named PE imports. Clipboard availability is backend-dependent.
+Reopen after file changes. No console Imports command is added.
+
+## GUI Exports
+
+Exports supports native PE, ELF and thin Mach-O. Raw/other formats and Mach-O
+Fat report unsupported; supported files without exports display an empty table.
+PE enumerates nonempty function slots, preserves ordinal-only and forwarded
+entries, and returns the first native name for aliases sharing a slot. A
+forwarder's offset/address locates its string; its target is not resolved.
+
+ELF retains named, defined global/weak symbols with default/protected visibility
+from DYNSYM, or SYMTAB for relocatable objects. Hidden/internal/local/undefined
+and file/section symbols are omitted. Sectionless dynamic tables and version
+metadata are not enumerated. Addresses follow native symbol conventions;
+absolute values have no physical offset. Mach-O uses native nlist/export-trie
+metadata, including reexports and indirect aliases. An available export trie
+determines the public export set. Special trie flags/resolver metadata are not
+separate columns. Unknown/non-applicable ordinals use `-` for ELF/Mach-O.
+
+The snapshot is capped at 10,000 records, 16 KiB per displayed name/forwarder
+and 8 MiB of aggregate NUL-inclusive strings. Names escape control/non-ASCII
+bytes. Malformed, cancelled and over-limit reads return no partial result.
+Filtering matches name/forwarder substrings with ASCII case folding, accepts
+up to 256 UTF-8 bytes and selects the first visible row. Copy/TSV includes full
+visible values and offsets, capped at 32 MiB. Clipboard support depends on the
+backend. Reopen after file changes. No console Exports command is added.
+
+## GUI Resources
+
+Resources supports native PE resource leaves and ELF `.gresource.*` bundles/
+supported value leaves. Other formats, including Mach-O/Fat, report unsupported.
+Supported PE/ELF inputs without resources show an empty table. PE preserves
+named/numeric IDs, code pages and physical ranges; zero-byte resources can have
+no physical offset. UTF-8 names are retained and control/invalid UTF-8 bytes are
+escaped. There is no payload preview, extraction, editing or console Resources
+command in this release.
+
+ELF bundle rows cover the complete stored bundle. Leaf ranges describe stored
+bytes, so compressed leaves show compressed sizes rather than decoded lengths.
+Compression state is not a separate field in the native resource record. The
+native provider omits unsupported variants/flags and invalid leaf-name graphs
+(including parent cycles), retaining the bundle when its root is valid. Invalid
+bundle roots/read failures are fatal. There is no GResource decompression.
+
+Snapshots retain at most 10,000 records, 16 KiB per displayed name and 8 MiB of
+aggregate NUL-inclusive type/name/language strings. Native reader failures,
+cancellation and limits return no partial snapshot. Filtering matches displayed
+type/name/language or decimal IDs using ASCII case folding, accepts up to 256
+UTF-8 bytes and selects the first visible row. Copied TSV includes all three
+numeric IDs, code page and full visible names/ranges, capped at 32 MiB.
+Clipboard availability depends on the backend. Reopen after file changes.
+
+## GUI Symbols
+
+Symbols supports native PE COFF, ELF and thin Mach-O symbol metadata. Raw
+formats, standalone COFF objects and Mach-O Fat report unsupported; supported
+files without symbol tables show an empty table. PE skips auxiliary entries as
+rows but retains their count and supported file/function/section metadata. ELF
+includes native symbol tables without export-visibility filtering. Sectionless
+dynamic tables and symbol version metadata are not enumerated. ELF table
+indices can repeat across tables; record offsets identify the source entries.
+
+Mach-O includes nlist symbols and trie-only exports, with unknown kind or size
+where native metadata does not provide them. Indirect-symbol native values can
+be string-table indices. Trie-only entries have no nlist index/record offset;
+reexport target details are available in the Exports view. Separate debug files,
+DWARF/PDB decoding, demangling and process-memory symbol resolution are not
+provided. Size zero can mean unknown; absolute values and debug records have no
+physical target offset. Values are native metadata, not resolved runtime values.
+
+The snapshot is capped at 10,000 records, 16 KiB per displayed name/filename
+and 8 MiB of aggregate NUL-inclusive strings. Valid UTF-8 is retained and
+control/invalid bytes are escaped. Native failures, cancellation and bounds
+return no partial snapshot. Filter matches name/filename substrings with ASCII
+case folding, accepts up to 256 UTF-8 bytes and selects the first visible row.
+TSV copying includes full typed metadata, capped at 32 MiB. Clipboard support
+depends on the backend. Reopen after changes. No console Symbols mode is added.
+
 ## Console features
 
-The following `diec` options are not ported: `--entropy` (`-e`), `--info`
-(`-i`), `--struct` (`-S`), `--showstructs` (`-w`), `--test` and
-`--createtest`. They belong to the `XFileInfo` / `EntropyProcess` modules
-rather than the scan engine.
+The following `diec` options are not ported: `--test` and `--createtest`.
 
-Everything else is present and produces byte-identical output, including the
-four structured formats (`--json`, `--xml`, `--csv`, `--tsv`) and
-`--verbose`. The short options are `diec`'s, which are not always the
+`--info` (`-i`), native structure selection with `--struct` (`-S`) and
+`--showstructs` (`-w`) use DataStructs for PE, ELF and thin Mach-O only.
+Other formats and Mach-O Fat containers return an unsupported-format error
+for those structure operations. The DataStructs schema differs from Qt's
+XFileInfo report. Entropy and legacy XFileInfo method selectors remain
+unavailable through `--struct`; `Hash` / `Hash#ALGORITHM` and `Strings` are handled separately
+as a whole-file byte operation. Structure reports are bounded to 65,536
+visited/emitted structures, 262,144 visited fields and 64 MiB of output per
+file; exceeding a bound fails without a partial report.
+
+`--hash` and `-S Hash` currently expose CRC32, MD5, SHA1 and SHA256. CRC32 is
+ISO-HDLC/ZIP. MD4, SHA224, SHA384 and SHA512 are not implemented by this command;
+unknown selectors fail explicitly. All four use existing xxfclib contexts in
+one checked streaming pass over the whole file. No format parser is involved.
+Digests are lowercase hex, including standard digests for empty files, where
+older DIE 3.21 returns blank strings. JSON/XML structure is compatible for the
+supported selected fields; the full default set differs from DIE's seven hashes.
+The GUI shows those same four results and allows selection/copy, with progress
+and cancellation. Clipboard availability depends on the widget backend.
+
+Strings uses a separate raw-byte operation (`--strings` / `-S Strings`) for
+all formats. ASCII, strict UTF-8 and UTF-16LE/BE are implemented; other legacy
+code pages and UTF-32 are unavailable. Both UTF-16 alignments are scanned.
+Automatic mode requires a BOM or a consecutive ASCII run meeting the minimum;
+explicit UTF-16 mode omits that heuristic and may return more binary candidates.
+The scalar acceptance policy excludes ASCII/C1 controls, surrogates, BOMs,
+noncharacters and selected format-control ranges; it does not use a complete
+Unicode category database. Offsets are physical, lengths count scalars, and
+terminators/BOMs are excluded. Overlapping interpretations are retained.
+Results are bounded to 10,000 records, 8 MiB UTF-8 text and 1 MiB per string;
+formatted console output is capped at 32 MiB. A bound fails without partial
+file output. The GUI uses default extraction settings (minimum 4/all), and
+provides filtering, Copy, full-text View and native Save CSV. Extraction options
+are currently console-only. DIE 3.21 provides no Strings command to compare.
+
+Entropy streams all file types with bounded working memory. Native region maps
+are used for PE, ELF and thin Mach-O; other formats (including archives and
+Mach-O Fat) currently use one Data region. At most 1024 physical regions are
+accepted; exceeding this limit fails without partial output. The GUI graph has
+up to 100 automatic blocks and retains no file bytes, so custom Count/Reload
+is unavailable. The reusable widget exports CSV/SVG when embedded in a host;
+CDIE's read-only modal hides export buttons. JSON/XML follow DIE's entropy
+shape; CSV/TSV quote names for safe delimiter handling. Float comparisons use
+1e-12 tolerance. Packed status is an entropy heuristic, not proof of packing.
+
+Scan-output compatibility is checked separately from File Information; see
+TESTING.md for the reference-version differences and historical corpus results.
+The short options are `diec`'s, which are not always the
 mnemonic letter — `-a` is `--alltypes`, `-p` is `--plaintext`, `-l` is
 `--profiling` and `-s` is `--showdatabase`. Where this port previously used a
 different letter, that spelling still works as an alias.
 
-`--profiling` sets the flag that scripts observe but prints no timings.
+`--profiling` now emits timings through xxfclib's profiling implementation.
 
-`--alltypes` is accepted but inert. In the reference engine it runs a second
-scan with a different file type (`MSDOS` for a PE, `ZIP` for an APK) and
-prints the results as a **second group** under its own format heading. The
-result model here is a single flat list per file, so honouring the flag would
-change the output shape rather than match it; leaving the flag inert keeps
-the default output identical, which is the property the port is built for.
+`-a` / `--alltypes` runs applicable parent-format passes and retains separate
+result groups. `--overlayscan`, `--resourcesscan` and `--archivesscan` expose
+the engine's bounded child scans. Native GUI Scan options and TUI F2 expose
+the same modes. These modes do not enable recursive scanning of nested members.
 
 `--recursivescan` is implemented for walking directories on disk. Scanning
 *inside* archives is a different feature and is covered above.

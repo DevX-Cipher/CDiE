@@ -30,15 +30,10 @@
 #include <xxfclib/scan/xx_scan_console.h>
 
 #include "../app/cdie_app.h"
-
-typedef enum cdie_output_format {
-    CDIE_OUTPUT_TEXT = 0,
-    CDIE_OUTPUT_JSON,
-    CDIE_OUTPUT_XML,
-    CDIE_OUTPUT_CSV,
-    CDIE_OUTPUT_TSV,
-    CDIE_OUTPUT_PLAIN
-} cdie_output_format;
+#include "../app/cdie_file_info.h"
+#include "../app/cdie_entropy.h"
+#include "../app/cdie_hash.h"
+#include "../app/cdie_strings.h"
 
 static int g_bStdoutFailed = 0;
 
@@ -167,6 +162,10 @@ static void print_help(void)
     cdie_printf("  -h, --help                Displays this help.\n");
     cdie_printf("  -v, --version             Displays version information.\n");
     cdie_printf("  -r, --recursivescan       Scan directories recursively.\n");
+    cdie_printf("  -a, --alltypes            Scan applicable parent file types.\n");
+    cdie_printf("      --overlayscan         Scan trailing overlays.\n");
+    cdie_printf("      --resourcesscan       Scan PE/ELF resource payloads.\n");
+    cdie_printf("      --archivesscan        Scan supported archive members (one level).\n");
     cdie_printf("  -d, --deepscan            Deep scan.\n");
     cdie_printf("  -u, --heuristicscan       Heuristic scan.\n");
     cdie_printf("  -g, --aggressivecscan     Aggressive scan.\n");
@@ -211,6 +210,15 @@ static void print_help(void)
     cdie_printf("      --includetags <list>  Run signatures matching any ';'-separated tag.\n");
     cdie_printf("      --excludetags <list>  Skip signatures matching any ';'-separated tag.\n");
     cdie_printf("  -s, --showdatabase        Show the database information.\n");
+    cdie_printf("      --strings             Extract ASCII/UTF-8 and UTF-16 strings.\n");
+    cdie_printf("      --strings-min <n>     Minimum decoded characters (1..1024, default 4).\n");
+    cdie_printf("      --strings-encoding <e> ascii, utf8, utf16le, utf16be or all (default).\n");
+    cdie_printf("      --hash                Show CRC32, MD5, SHA1 and SHA256 hashes.\n");
+    cdie_printf("                            Select one with -S Hash#SHA256.\n");
+    cdie_printf("  -e, --entropy             Show Shannon entropy of the file and its regions.\n");
+    cdie_printf("  -i, --info                Show native PE/ELF/Mach-O DataStructs and fields.\n");
+    cdie_printf("  -S, --struct <name>       Show NAME[#FIELD], optionally FORMAT::NAME.\n");
+    cdie_printf("  -w, --showstructs         List DataStructs (target optional).\n");
     cdie_printf("      --createtar <path>    Create TAR archive from database.\n");
     cdie_printf("      --createprecompiledtar <p> Create precompiled bytecode TAR archive.\n");
     cdie_printf("\n");
@@ -367,6 +375,67 @@ static void show_database(DBase *pDb, xx_scan_options *pOptions,
     }
 }
 
+/* File analysis bypasses signature loading and keeps multi-file JSON/XML
+ * well formed even when one target fails. The native collector is read-only. */
+static int show_file_analysis(xx_list_t *targets, int recursive, const char *selector,
+    int inventory, int entropy, int hash, const cdie_strings_options *strings, cdie_output_format format)
+{
+    xx_list_t files;
+    size_t i, written = 0;
+    int result = CR_SUCCESS, wrapper;
+    xx_list_init(&files, sizeof(char *), NULL);
+    if (!xx_list_count(targets)) {
+        char *text = NULL, *error = NULL;
+        if (!inventory) {
+            xx_rt_fprintf(xx_rt_stderr(), "File analysis requires a target\n");
+            result = CR_INVALIDPARAMETER;
+        } else if (cdie_file_info(NULL, NULL, 1, format, &text, &error)) cdie_printf("%s", text);
+        else {
+            xx_rt_fprintf(xx_rt_stderr(), "%s\n", error ? error : "Cannot list DataStructs");
+            result = CR_CANNOTOPENFILE;
+        }
+        xx_rt_free(text); xx_rt_free(error);
+        free_string_vector(&files);
+        return result;
+    }
+    for (i = 0; i < xx_list_count(targets); ++i) {
+        const char *target = string_at(targets, i);
+        if (cdie_path_exists(target)) cdie_find_files(target, &files, recursive);
+        else {
+            xx_rt_fprintf(xx_rt_stderr(), "Cannot find: %s\n", target);
+            result = CR_CANNOTFINDFILE;
+        }
+    }
+    wrapper = xx_list_count(&files) != 1;
+    if (wrapper && format == CDIE_OUTPUT_JSON) cdie_printf("{\"files\":[");
+    else if (wrapper && format == CDIE_OUTPUT_XML) cdie_printf("<files>\n");
+    for (i = 0; i < xx_list_count(&files); ++i) {
+        const char *path = string_at(&files, i);
+        char *text = NULL, *error = NULL;
+        if (strings ? cdie_strings_report(path, strings, format, &text, &error) :
+            hash ? cdie_hash_report(path, selector, format, &text, &error) :
+            entropy ? cdie_entropy_report(path, format, &text, &error) :
+            cdie_file_info(path, selector, inventory, format, &text, &error)) {
+            const char *output = text;
+            if (wrapper && format == CDIE_OUTPUT_JSON && written) cdie_printf(",");
+            if (!entropy && !hash && written && (format == CDIE_OUTPUT_CSV || format == CDIE_OUTPUT_TSV)) {
+                const char *header_end = xx_rt_strchr(output, '\n');
+                if (header_end) output = header_end + 1;
+            }
+            cdie_printf("%s", output);
+            ++written;
+        } else {
+            xx_rt_fprintf(xx_rt_stderr(), "%s: %s\n", path, error ? error : "Cannot analyze file");
+            result = CR_CANNOTOPENFILE;
+        }
+        xx_rt_free(text); xx_rt_free(error);
+    }
+    if (wrapper && format == CDIE_OUTPUT_JSON) cdie_printf("]}\n");
+    else if (wrapper && format == CDIE_OUTPUT_XML) cdie_printf("</files>\n");
+    free_string_vector(&files);
+    return result;
+}
+
 /* Entry point. utils_entry.c calls this: on a no-CRT Windows build from the
  * real linker entry, otherwise from main(). */
 int x_main(int argc, char *argv[])
@@ -380,6 +449,8 @@ int x_main(int argc, char *argv[])
     int bShowDatabase = 0;
     int bShowHelp = 0;
     int bShowVersion = 0;
+    int bShowInfo = 0, bShowStructs = 0, bEntropy = 0, bHash = 0, bStrings = 0, bStringsConfig = 0;
+    cdie_strings_options stringsOptions = cdie_strings_defaults();
     int bDatabaseLoaded = 0;
     int bEndOfOptions = 0;
     int bStructuredWrapper = 0;
@@ -387,6 +458,7 @@ int x_main(int argc, char *argv[])
     cdie_output_format outputFormat = CDIE_OUTPUT_TEXT;
     const char *pCreateTarPath = NULL;
     const char *pCreateBcTarPath = NULL;
+    const char *pStruct = NULL;
 
     g_bStdoutFailed = 0;
     xx_scan_options_init(&options);
@@ -419,6 +491,14 @@ int x_main(int argc, char *argv[])
                 bShowVersion = 1;
             } else if (xx_rt_strcmp(pArg, "--recursivescan") == 0) {
                 options.recursive_scan = 1;
+            } else if (xx_rt_strcmp(pArg, "--alltypes") == 0) {
+                options.all_types_scan = 1;
+            } else if (xx_rt_strcmp(pArg, "--overlayscan") == 0) {
+                options.overlay_scan = 1;
+            } else if (xx_rt_strcmp(pArg, "--resourcesscan") == 0) {
+                options.resources_scan = 1;
+            } else if (xx_rt_strcmp(pArg, "--archivesscan") == 0) {
+                options.archives_scan = 1;
             } else if (xx_rt_strcmp(pArg, "--deepscan") == 0) {
                 options.deep_scan = 1;
             } else if (xx_rt_strcmp(pArg, "--heuristicscan") == 0) {
@@ -469,6 +549,41 @@ int x_main(int argc, char *argv[])
                 }
             } else if (xx_rt_strcmp(pArg, "--showdatabase") == 0) {
                 bShowDatabase = 1;
+            } else if (xx_rt_strcmp(pArg, "--strings") == 0) {
+                bStrings = 1;
+            } else if (xx_rt_strcmp(pArg, "--strings-min") == 0) {
+                unsigned value = 0;
+                const char *digits = i + 1 < argc ? argv[++i] : "";
+                bStringsConfig = 1;
+                if (!*digits) nResult = CR_INVALIDPARAMETER;
+                for (; *digits; ++digits) {
+                    if (*digits < '0' || *digits > '9' || value > 1024) { nResult = CR_INVALIDPARAMETER; break; }
+                    value = value * 10 + (unsigned)(*digits - '0');
+                }
+                if (value < 1 || value > 1024) nResult = CR_INVALIDPARAMETER;
+                if (nResult != CR_SUCCESS) xx_rt_fprintf(xx_rt_stderr(), "--strings-min requires 1..1024\n");
+                stringsOptions.minimum_length = value;
+            } else if (xx_rt_strcmp(pArg, "--strings-encoding") == 0) {
+                bStringsConfig = 1;
+                stringsOptions.encodings = cdie_strings_parse_encoding(i + 1 < argc ? argv[++i] : NULL);
+                if (!stringsOptions.encodings) {
+                    xx_rt_fprintf(xx_rt_stderr(), "Unknown strings encoding (ascii, utf8, utf16le, utf16be, all)\n");
+                    nResult = CR_INVALIDPARAMETER;
+                }
+            } else if (xx_rt_strcmp(pArg, "--hash") == 0) {
+                bHash = 1;
+            } else if (xx_rt_strcmp(pArg, "--entropy") == 0) {
+                bEntropy = 1;
+            } else if (xx_rt_strcmp(pArg, "--info") == 0) {
+                bShowInfo = 1;
+            } else if (xx_rt_strcmp(pArg, "--showstructs") == 0) {
+                bShowStructs = 1;
+            } else if (xx_rt_strcmp(pArg, "--struct") == 0) {
+                if (i + 1 < argc && argv[i + 1][0]) pStruct = argv[++i];
+                else {
+                    xx_rt_fprintf(xx_rt_stderr(), "Option --struct requires a structure name\n");
+                    nResult = CR_INVALIDPARAMETER;
+                }
             } else if ((xx_rt_strcmp(pArg, "--database") == 0) && (i + 1 < argc)) {
                 xx_rt_free(options.main_database_path);
                 options.main_database_path = cdie_strdup(argv[++i]);
@@ -513,6 +628,7 @@ int x_main(int argc, char *argv[])
                             break;
 
                         case 'r': options.recursive_scan = 1; break;
+                        case 'a': options.all_types_scan = 1; break;
                         case 'd': options.deep_scan = 1; break;
                         case 'u': options.heuristic_scan = 1; break;
                         case 'g': options.aggressive_scan = 1; break;
@@ -545,6 +661,20 @@ int x_main(int argc, char *argv[])
                             else nResult = CR_INVALIDPARAMETER;
                             break;
                         case 's': bShowDatabase = 1; break;
+                        case 'e': bEntropy = 1; break;
+                        case 'i': bShowInfo = 1; break;
+                        case 'w': bShowStructs = 1; break;
+                        case 'S': {
+                            if (pArg[k + 1]) {
+                                pStruct = &pArg[k + 1];
+                                k = xx_rt_strlen(pArg) - 1;
+                            } else if (i + 1 < argc && argv[i + 1][0]) pStruct = argv[++i];
+                            else {
+                                xx_rt_fprintf(xx_rt_stderr(), "Option -S requires a structure name\n");
+                                nResult = CR_INVALIDPARAMETER;
+                            }
+                            break;
+                        }
 
                         case 'D': {
                             const char *pVal = NULL;
@@ -638,6 +768,29 @@ int x_main(int argc, char *argv[])
         } else {
             cdie_printf("%s %s\n", X_APPLICATIONDISPLAYNAME, X_APPLICATIONVERSION);
         }
+        xx_scan_options_free(&options);
+        free_string_vector(&vecTargets);
+        free_string_vector(&vecFiles);
+        return cdie_finish_result(nResult);
+    }
+
+    if (pStruct && !xx_rt_strcmp(pStruct, "Strings")) { bStrings = 1; pStruct = NULL; }
+    /* Hash is a byte operation for every format, separate from DataStructs. */
+    if (pStruct && (!xx_rt_strcmp(pStruct, "Hash") || !xx_rt_strncmp(pStruct, "Hash#", 5))) {
+        bHash = 1; pStruct = pStruct[4] == '#' ? pStruct + 5 : NULL;
+        if (pStruct && !*pStruct) {
+            xx_rt_fprintf(xx_rt_stderr(), "Hash# requires an algorithm\n");
+            nResult = CR_INVALIDPARAMETER;
+        }
+    }
+    if (bStrings || bStringsConfig || bHash || bEntropy || bShowInfo || bShowStructs || pStruct) {
+        if (nResult != CR_SUCCESS || (bStringsConfig && !bStrings) ||
+            (bStrings && (bHash || bEntropy || bShowInfo || bShowStructs || pStruct)) || (bHash && (bEntropy || bShowInfo || bShowStructs || cdie_hash_algorithm_index(pStruct) == -2)) ||
+            (bEntropy && (bShowInfo || bShowStructs || pStruct)) || bShowDatabase ||
+            pCreateTarPath || pCreateBcTarPath || (bShowStructs && (bShowInfo || pStruct))) {
+            xx_rt_fprintf(xx_rt_stderr(), "Choose one analysis mode and a supported selector (hashes: CRC32, MD5, SHA1, SHA256)\n");
+            nResult = CR_INVALIDPARAMETER;
+        } else nResult = show_file_analysis(&vecTargets, options.recursive_scan, pStruct, bShowStructs, bEntropy, bHash, bStrings ? &stringsOptions : NULL, outputFormat);
         xx_scan_options_free(&options);
         free_string_vector(&vecTargets);
         free_string_vector(&vecFiles);
@@ -789,6 +942,13 @@ int x_main(int argc, char *argv[])
                 cdie_printf("Cannot open: %s\n", pFileName);
             }
             nResult = CR_CANNOTOPENFILE;
+            /* Failed expansion can leave an owned diagnostic result. */
+            {
+                int error_index;
+                for (error_index = 0; error_index < result.nErrorCount; ++error_index)
+                    xx_rt_fprintf(xx_rt_stderr(), "%s\n", result.ppErrors[error_index]);
+            }
+            xx_scan_result_free(&result);
             continue;
         }
 

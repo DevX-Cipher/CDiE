@@ -49,13 +49,18 @@ int gui_result_tree_emit(const xx_scan_result *result, int hide_unknown, gui_bac
 {
     result_group *groups;
     size_t group_count = 0, emitted = 0, next_node = 1, i, j;
-    int has_overlay = 0, ok = 0;
+    int has_overlay = 0, multiple_formats = 0, ok = 0;
+    const xx_scan_record *first_input = NULL;
     if (!result || result->nCount < 0 || (!result->pRecords && result->nCount) || !callback) return 0;
     groups = xx_rt_calloc((size_t)result->nCount + 1, sizeof(*groups));
     if (!groups) return 0;
     if (!callback(SIZE_MAX, xft_to_string(result->fileType), "", user)) goto done;
     for (i = 0; i < (size_t)result->nCount; ++i) {
         const xx_scan_record *record = &result->pRecords[i];
+        if (!record->parent_id && record->scan_part == XX_SCAN_PART_INPUT) {
+            if (!first_input) first_input = record;
+            else if (record->file_type != first_input->file_type) multiple_formats = 1;
+        }
         for (j = 0; j < group_count; ++j) if (same_group(record, groups[j].record)) break;
         if (j == group_count) { groups[group_count++].record = record; }
         if (record->parent_id && (record->scan_part == XX_SCAN_PART_OVERLAY || record->scan_part == XX_SCAN_PART_INPUT)) has_overlay = 1;
@@ -68,17 +73,21 @@ int gui_result_tree_emit(const xx_scan_result *result, int hide_unknown, gui_bac
             int waiting = 0;
             if (groups[i].emitted) continue;
             if (record->parent_id) {
+                size_t matches = 0;
                 for (j = 0; j < group_count; ++j) {
                     if (groups[j].record->scan_id == record->parent_id) {
+                        ++matches;
                         if (!groups[j].emitted) waiting = 1;
                         else parent = groups[j].node;
-                        break;
                     }
                 }
+                /* Parent-format passes share a scan identity. Their children
+                 * belong to the containing input, not an arbitrary pass. */
+                if (matches > 1) parent = 0;
             }
             if (waiting) continue;
             groups[i].node = 0;
-            if (record->parent_id || record->offset) {
+            if (record->parent_id || record->offset || multiple_formats) {
                 xx_buf_t text;
                 char *label;
                 const char *format = record->file_type == XX_FILE_TYPE_BINARY ? "Binary" : xx_format_file_type_to_string(record->file_type);
@@ -89,6 +98,8 @@ int gui_result_tree_emit(const xx_scan_result *result, int hide_unknown, gui_bac
                         (unsigned long long)record->archive_offset, (unsigned long long)record->archive_size,
                         record->archive_compressed ? "Member" : "Input", (unsigned long long)record->offset,
                         (unsigned long long)record->size);
+                } else if (!record->parent_id && record->scan_part == XX_SCAN_PART_INPUT) {
+                    xx_buf_appendf(&text, "Format: %s", format);
                 } else {
                     xx_buf_appendf(&text, "%s: %s [Offset = 0x%08llx,Size = 0x%llx]",
                         record->scan_part == XX_SCAN_PART_RESOURCE ? "Resource" : "Overlay", format,

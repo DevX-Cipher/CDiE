@@ -30,6 +30,7 @@ Makefile
 .vscode/
 .idea/
 *.swp
+__pycache__/
 
 # internal notes, not part of the shipped package
 private_docs/

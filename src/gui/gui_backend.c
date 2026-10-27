@@ -89,6 +89,7 @@ int gui_backend_init(void)
     g_options.deep_scan = 1;
     g_options.heuristic_scan = 1;
     g_options.verbose = 1;
+    g_options.overlay_scan = 1;
 
     g_options.main_database_path = gui_resolve_db("db");
     g_options.extra_database_path = gui_resolve_db("db_extra");
@@ -159,6 +160,25 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
     g_options.custom_database_path = pNewCustom;
     g_bMainLoaded = 1;
     return 1;
+}
+
+static int gui_same_db_path(const char *pPath, const char *pDefaultName, const char *pCurrent)
+{
+    char *pResolved = ((pPath != NULL) && (pPath[0] != 0)) ? cdie_strdup(pPath) : gui_resolve_db(pDefaultName);
+    const char *pLeft = pResolved, *pRight = pCurrent ? pCurrent : "";
+    int bSame;
+    if (!pResolved) return 0;
+    while (*pLeft && *pLeft == *pRight) { ++pLeft; ++pRight; }
+    bSame = *pLeft == *pRight;
+    xx_rt_free(pResolved);
+    return bSame;
+}
+
+int gui_backend_db_paths_current(const char *pMain, const char *pExtra, const char *pCustom)
+{
+    return g_bInited && gui_same_db_path(pMain, "db", g_options.main_database_path) &&
+           gui_same_db_path(pExtra, "db_extra", g_options.extra_database_path) &&
+           gui_same_db_path(pCustom, "db_custom", g_options.custom_database_path);
 }
 
 int gui_backend_signature_count(void)
@@ -334,6 +354,24 @@ int gui_backend_scan(const char *pUtf8Path, char **ppResultText, char **ppTypeNa
     return gui_backend_scan_results(pUtf8Path, NULL, NULL, ppResultText, ppTypeName);
 }
 
+unsigned int gui_backend_get_scan_modes(void)
+{
+    return (g_options.all_types_scan ? GUI_SCAN_ALL_TYPES : 0u) |
+        (g_options.overlay_scan ? GUI_SCAN_OVERLAYS : 0u) |
+        (g_options.resources_scan ? GUI_SCAN_RESOURCES : 0u) |
+        (g_options.archives_scan ? GUI_SCAN_ARCHIVES : 0u);
+}
+
+int gui_backend_set_scan_modes(unsigned int modes)
+{
+    if (!g_bInited || (modes & ~GUI_SCAN_MODES_MASK)) return 0;
+    g_options.all_types_scan = (modes & GUI_SCAN_ALL_TYPES) != 0;
+    g_options.overlay_scan = (modes & GUI_SCAN_OVERLAYS) != 0;
+    g_options.resources_scan = (modes & GUI_SCAN_RESOURCES) != 0;
+    g_options.archives_scan = (modes & GUI_SCAN_ARCHIVES) != 0;
+    return 1;
+}
+
 int gui_backend_scan_results(const char *pUtf8Path, gui_backend_result_fn pResultFn,
     void *pUserData, char **ppResultText, char **ppTypeName)
 {
@@ -363,7 +401,6 @@ static int scan_results_impl(const char *pUtf8Path, int nTypeId,
     }
 
     xx_scan_options options = g_options;
-    if (tree_fn) options.overlay_scan = true;
     if (!die_engine_scan_file_type_pd(pUtf8Path, &g_db, &options, (XFileType)nTypeId, &result, pProgress)) {
         xx_scan_result_free(&result);
         return 0;

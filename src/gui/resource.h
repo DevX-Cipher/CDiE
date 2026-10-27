@@ -25,13 +25,8 @@
 #ifndef CDIE_GUI_RESOURCE_H
 #define CDIE_GUI_RESOURCE_H
 
-#define IDD_OPTIONS           200
-#define IDC_OPT_MAIN          201
-#define IDC_OPT_MAIN_BROWSE   202
-#define IDC_OPT_EXTRA         203
-#define IDC_OPT_EXTRA_BROWSE  204
-#define IDC_OPT_CUSTOM        205
-#define IDC_OPT_CUSTOM_BROWSE 206
-#define IDC_OPT_ERROR         207
+/* The lowest icon id is the executable icon Explorer shows. */
+#define IDI_CDIE         1
+#define IDR_ABOUT_IMAGE  300
 
 #endif /* CDIE_GUI_RESOURCE_H */

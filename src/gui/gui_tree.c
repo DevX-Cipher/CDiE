@@ -1,5 +1,6 @@
 /* Copyright (c) 2026 hors<horsicq@gmail.com> · SPDX-License-Identifier: MIT */
 #include "gui_tree.h"
+#include "app/cdie_translation.h"
 #include "gui_backend.h"
 #include <xxwidgets/xxwidgets_process.h>
 #include <xxfclib/threads/xx_threads.h>
@@ -111,7 +112,7 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
     /* BUSY (inside an input callback or another modal form) returns before
      * starting, so the scan simply runs to its end; any other failure has
      * already passed the worker a stop request. Either way, join it. */
-    if (owner) (void)xxwidgets_process_dialog(owner, "Scanning", &progress, update_progress, &job);
+    if (owner) (void)xxwidgets_process_dialog(owner, CDIE_TR("Scanning"), &progress, update_progress, &job);
     ok = xx_thread_join(thread, NULL) && job.ok;
     xx_mutex_destroy(job.lock);
     if (cancelled) *cancelled = job.work.is_stop;

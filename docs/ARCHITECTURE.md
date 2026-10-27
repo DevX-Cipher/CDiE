@@ -19,6 +19,191 @@ On Windows those stubs are implemented on Win32 alone, so the shipped
 executable imports nothing but `KERNEL32.dll` — see
 [The runtime layer](#the-runtime-layer).
 
+File Information uses `app/cdie_file_info.c` as a shared synchronous native
+DataStructs walker. Its visitor API is used by the console formatters and by
+`gui/gui_file_information.c`, which copies a bounded presentation model on a
+worker thread. It has no signature-database dependency and only opens the PE,
+ELF and thin Mach-O native readers. Progress observation copies worker state
+under a mutex; observer stop requests are retained as sticky cancellation.
+Partial or cancelled models are discarded before any widgets are updated.
+
+The GUI passes the completed model to `xxwidgets_file_information_dialog`.
+The reusable form composes `xxwidgets_data_struct_view` and its field table,
+copies its input, handles navigation and resize events, and restores the owner
+on close. Parser operations stay in CDIE; xxwidgets remains engine-independent.
+CDIE builds with the matching xxwidgets source changes for this component.
+
+Entropy uses `app/cdie_entropy.c` for both console and GUI. It reads checked
+64 KiB chunks, builds 64-bit byte histograms and combines block histograms into
+the whole-file total. Native memory maps supply physical regions without using
+DataStructs. It retains at most 1024 regions, 100 samples and one 256-bin
+histogram; incomplete and cancelled results are discarded. Empty files are valid.
+`gui/gui_entropy.c` runs it on a cancellable worker, publishes mutex-protected
+progress snapshots and adapts the result to `xxwidgets_entropy_statistics`.
+`xxwidgets_entropy_set_statistics` validates/copies that snapshot and installs
+it transactionally. Its modal uses the existing entropy tables, graph and byte
+histogram, keeping all parser and file I/O outside xxwidgets.
+
+Hash uses `app/cdie_hash.c` and the public CRC32, MD5, SHA1 and SHA256
+contexts from xxfclib. It fans each checked 64 KiB read into all four contexts
+and emits a result only after successful finalization; cancellation is sticky.
+The borrowed-device entry point makes short reads and failures independently
+testable. It never loads parsers, DataStructs, signature databases or file bytes
+into a GUI control. `gui/gui_hash.c` uses the same worker/progress snapshot
+pattern as Entropy and adapts results to generic `xxwidgets_hash_entry` rows.
+The shared hash browser uses ordinary tree, label and clipboard controls,
+validates and copies a bounded model, and offers a resizable modal.
+
+Strings uses `app/cdie_strings.c`, independent of file parsers and databases.
+A checked 64 KiB stream feeds one byte/UTF-8 decoder and up to four UTF-16
+decoders (both byte orders/alignments). Decoder state survives chunks, including
+partial codepoints and surrogate pairs. It records physical ranges and counts
+scalars while retaining bounded decoded UTF-8. Automatic wide detection needs
+a BOM or a minimum-length ASCII streak; explicit modes can omit that heuristic.
+The final model is sorted only after successful completion, with no partial
+model on read failures, cancellation or resource limits. All model allocations
+use xx_rt and are released with `cdie_strings_free`.
+
+`gui/gui_strings.c` runs this same reader on the established cancellable worker
+and adapts results to existing `xxwidgets_string_record` values. The expanded
+`xxwidgets_strings_dialog` composes the existing string browser with metadata,
+Close/Esc, a full-text View and deferred CSV destination/export actions. The
+host owns file writes; the widget stays parser/engine-independent. A text dialog
+may now be owned by the current modal, restoring that modal and default action
+on every exit. TUI archive rows activate with Enter, matching native behavior.
+
+Hex View uses `gui/gui_hex_view.c` to open an `rb` file device independently
+of the scanner/parser. The application owns and closes it after the borrowed
+`xxwidgets_hexview_dialog` returns. `xxwidgets_hexview_browser_*` composes the
+existing file-backed HEXVIEW and toolbar controls, attaching a 64 KiB device
+window. Metadata/device replacement is transactional. Reads preserve the source
+cursor and failed reads retain the previous window. Device size changes are
+reloaded on Refresh; a shrunken file clamps an out-of-range window to EOF.
+
+The browser queues navigation, display settings, clipboard and dump actions
+from callbacks; `process` runs them after polling. Keyboard/context copies use
+the same override, bounded to 1 MiB of source bytes (offset-only copies are
+exempt). The existing shared byte-dump dialog streams selected ranges. The
+modal restores callbacks, default action, owner enabled state and focus; its
+borrowed device remains open. No format engine, database or DataStructs is used.
+
+Disasm uses `app/cdie_disasm.c` for read-only device ownership, native PE/ELF/
+thin Mach-O detection and address mapping, and the existing cdisasm decoder and
+formatter. It never requests DataStructs or a signature database. A page reads
+at most 4 KiB plus 15 bytes of lookahead and emits at most 512 rows. Instructions
+are clipped at physical mapping boundaries; undecodable bytes advance by one.
+The previous native page survives read/allocation failures. Metadata/maps are
+cached until close; each successful page read refreshes the file size.
+
+`gui/gui_disasm.c` opens that context on the same cancellable worker/progress
+pattern as the other analysis views, then lends a page-provider callback to
+`xxwidgets_disasm_browser_*`. The browser validates contiguous physical ranges
+and immediately copies rows into the existing `XXWIDGETS_DEBUGGER_DISASM` model.
+It owns presentation metadata, page history and toolbar state; device/parser/
+decoder ownership stays in CDIE. Reads and clipboard actions run outside input
+dispatch. Page replacement is transactional, and failed mode changes restore
+the previous selector. `xxwidgets_disasm_dialog` adds resizing, Close/Esc, F5 and
+Ctrl/Meta+G, restoring the owner's state before CDIE closes the context.
+
+Memory Map uses `app/cdie_memory_map.c` to read native PE sections or ELF/thin
+Mach-O segments into a detached snapshot. It retains physical, virtual-only,
+invisible and overlapping records in native order, checks physical bounds and
+address overflow, and rejects maps over 1024 rows. Generic inputs receive an
+unmapped Data interval. Readers and the read-only device are destroyed before
+the snapshot returns; it contains no borrowed format/map pointers. DataStructs
+and the signature engine are not used.
+
+`gui/gui_memory_map.c` loads that snapshot on the established cancellable worker,
+escapes executable name bytes and translates native part flags into labels.
+`xxwidgets_memory_map_*` copies it into a new MEMORY_MAP table, reusing the
+transactional debugger-table storage, cell escaping and shared native/TUI
+tabular rendering. It adds metadata, region details, physical/address lookup
+and deferred clipboard actions. Virtual-only rows never acquire a physical
+offset. Model/metadata replacement rolls back together; lookups use native
+record order with half-open intervals. The modal restores owner state on exit.
+
+Imports uses `app/cdie_imports.c` to collect a detached snapshot of native
+`xx_import_record` values. PE uses its StreamImport cursor for normal/delay
+tables; ELF uses its native symbol cursor and limits executable/shared-object
+records to DYNSYM, accepting named undefined global/weak symbols. Relocatable
+objects can use SYMTAB. Mach-O uses native inspection's undefined external nlist
+symbols and resolves ordinary dylib ordinals to library basenames. Unknown
+slot offsets/addresses stay unknown. The focused build enables import/symbol
+streams; DataStructs remain restricted to the previous three reader families.
+
+Names are copied through a bounded byte-escaping adapter; the snapshot owns all
+records/strings and no reader/device pointer. The `cdie_imports_free` destructor
+releases partial state on errors and complete snapshots after GUI use. Limits
+apply before publication. `gui/gui_imports.c` uses the existing worker/progress
+pattern and passes a completed snapshot to `xxwidgets_imports_*`.
+
+The reusable imports browser wraps `XXWIDGET_IMPORTSVIEWER` and its copied native
+table cells. It owns full source records for filtering and a separate copied
+visible table, swapping metadata/filter/buttons/table transactionally. Filter
+and clipboard work is queued after polling. Text export includes complete
+escaped cells, physical offsets and hints, independently of clipped display
+columns. The modal adds resize handling, Close/Esc and Ctrl/Meta+F, restoring
+the owner's callbacks/default/enabled state. It links no native parser.
+
+Exports uses `app/cdie_exports.c` for a detached `xx_export_record` snapshot.
+The focused build enables StreamExport for PE; the native cursor preserves
+ordinals, forwarders and slot order, skipping empty slots and choosing the
+first name for aliased slots. ELF uses the native symbol cursor, retains
+defined global/weak symbols in the applicable symbol tables, and reads the
+validated st_other byte for default/protected visibility. Absolute ELF values
+are normalized to unknown physical offsets. Mach-O's native inspector provides
+exported nlist/trie metadata, aliases, reexports and absolute addresses; regular
+addresses are translated through physical segments when possible.
+
+Name/forwarder byte escaping, limits, cancellation and ownership follow the
+Imports snapshot pattern. ELF/Mach-O ordinals use UINT64_MAX for unknown.
+`gui/gui_exports.c` publishes the completed worker result to the reusable
+`xxwidgets_exports_*` browser/modal. This composes the existing EXPORTSVIEWER
+table, whose ordinal cell now supports the unknown sentinel, with copied
+metadata, name/forwarder filtering, details and deferred TSV copying. The
+browser owns source and visible records; native devices/readers are closed
+before UI presentation and no DataStructs are requested.
+
+Resources uses `app/cdie_resources.c` to collect a detached native
+`xx_resource_record` snapshot through StreamResources for PE or ELF. The focused
+build already includes both providers for resource scanning. PE streams resource
+leaves with numeric/named type, name and language IDs, code pages and ranges;
+ELF provides recognized GResource bundles and supported leaves. No reader,
+device, cursor or payload is retained after loading.
+
+The adapter validates complete physical ranges and caps records/text before
+publication. Valid UTF-8 names are preserved; invalid UTF-8/control bytes escape
+individually, retaining PE Unicode names without trusting arbitrary GResource
+key bytes. Empty resources can have an unknown offset. Cursor failures and
+cancellation discard the complete snapshot. ELF's native provider can skip
+unsupported values/invalid leaf-name graphs while retaining a bundle record.
+
+`gui/gui_resources.c` follows the shared worker/progress pattern and passes the
+completed snapshot to `xxwidgets_resources_*`. The browser composes the existing
+RESOURCESVIEWER with copied metadata, source/visible counts, type/name/language
+filtering, numeric-ID/code-page details and deferred TSV copying. It owns no
+parser/device and performs no I/O. Source and visible rows are separate owned
+copies; metadata/filter/buttons/table replacement is transactional. The modal
+adds resize handling, Close/Esc and Ctrl/Meta+F and restores the owner on exit.
+
+Symbols uses `app/cdie_symbols.c` for a detached `xx_symbol_record` snapshot.
+PE and ELF use native StreamSymbols cursors; PE returns primary COFF entries
+with auxiliary metadata, and ELF traverses native symbol tables. Mach-O's
+native inspector supplies nlist entries plus trie-only exports. The adapter
+preserves native values, table/record locations, type, binding, section,
+auxiliary count and status flags; it maps Mach-O target addresses to physical
+segments when possible. Absolute/debug targets are not treated as file offsets.
+Trie-only entries use unknown table index/record offset.
+
+Names and source filenames use bounded UTF-8 validation/escaping, with all
+snapshot strings owned independently of cursors. Bounds, cancellation and
+native errors discard the partial model. `gui/gui_symbols.c` publishes a
+completed worker result to the reusable `xxwidgets_symbols_*` browser/modal.
+It composes SYMBOLSVIEWER with copied metadata, name/filename filtering,
+selection details and deferred TSV copying. Full typed fields are exported
+even when table columns are clipped; the widget performs no file I/O and
+retains no parser/device. No DataStructs are requested.
+
 ```text
                      ┌──────────────────────────────┐
    command line  ──▶ │ console/main_console.c        │

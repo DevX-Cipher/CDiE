@@ -4,6 +4,81 @@
 
     Initial release.
 
+    * Added GUI Symbols (Ctrl+Shift+Y/Cmd+Shift+Y) for native PE COFF, ELF
+      and thin Mach-O symbols. Expanded xxwidgets_symbols_* around SYMBOLSVIEWER
+      with filtering, metadata details, Copy row/visible and a reusable modal.
+      Added native fixtures, ownership/cancellation and GUI tests.
+
+    * Added GUI Resources (Ctrl+Shift+U/Cmd+Shift+U) for native PE resources
+      and ELF GResource bundles/leaves, with cancellable bounded metadata
+      loading and no DataStructs. Expanded xxwidgets_resources_* around
+      RESOURCESVIEWER with filtering, IDs/code-page details, Copy row/visible
+      and a reusable modal. Added Unicode, bounds, GLib and GUI tests.
+
+    * Added GUI Exports (Ctrl+Shift+E/Cmd+Shift+E) for native PE, ELF and
+      thin Mach-O, including PE forwarders/ordinals, ELF visibility and Mach-O
+      export tries/reexports. Expanded xxwidgets_exports_* around EXPORTSVIEWER
+      with filtering, details, Copy row/visible and a reusable snapshot modal.
+      Added native fixture, cancellation, ownership and GUI interaction tests.
+
+    * Added GUI Imports (Ctrl+Shift+I/Cmd+Shift+I) for native PE, ELF and
+      thin Mach-O metadata, with cancellable bounded loading and no DataStructs.
+      Expanded xxwidgets_imports_* around the existing IMPORTSVIEWER with
+      filtering, details, Copy row/visible and a reusable snapshot modal.
+      Added import fixtures, ownership/cancellation and GUI interaction tests.
+
+    * Added GUI Memory Map (Ctrl+M/Cmd+Shift+M), with native PE sections,
+      ELF/thin Mach-O segments and flat Data for other files. Preserves virtual
+      tails, overlays and invisible records without DataStructs. Expanded
+      xxwidgets with a reusable six-column table, snapshot browser/modal,
+      offset/address lookup and copied text export. Added regression tests.
+
+    * Added GUI Disasm (Ctrl+Shift+A/Cmd+Shift+A), using cdisasm for x86,
+      ARM, Thumb and AArch64. Added native PE/ELF/thin Mach-O mode/entry/VA
+      detection, manual modes, bounded pages, Go, Back/Next, Refresh and Copy.
+      Expanded xxwidgets with a reusable provider-backed browser and modal
+      around its debugger disassembly table. Added decoder/navigation tests.
+
+    * Added GUI Hex View (Ctrl+Shift+X/Cmd+Shift+X) with read-only file-backed
+      browsing, 64-bit offsets, Go/paging, Refresh, encoding/row controls,
+      copying and byte export. Added reusable xxwidgets_hexview_browser_*
+      and modal APIs around the existing HEXVIEW, with deferred actions,
+      bounded memory/copies and read-failure recovery. Added regression tests.
+
+    * Added --strings/-S Strings, minimum length and encoding controls, with
+      checked streaming ASCII/UTF-8 and UTF-16LE/BE extraction for all formats.
+      Added cancellable GUI Strings actions and expanded xxwidgets_strings_*
+      with a modal, full-text View and deferred host CSV saving. Added owned
+      nested text dialogs and TUI row activation, plus extraction/GUI tests.
+
+    * Added --hash, -S Hash and -S Hash#ALGORITHM for native CRC32, MD5,
+      SHA1 and SHA256. Added GUI Hash actions (Ctrl+H/Cmd+Shift+H), cancellable
+      one-pass streaming and reusable xxwidgets_hash_* browser/modal with
+      selection and clipboard support. Added vector, I/O failure, ownership
+      and DIE reference tests.
+
+    * Added --entropy/-e with text, JSON, XML, CSV and TSV reports, plus native
+      GUI Entropy actions (Ctrl+E/Cmd+E). Shared bounded-memory streaming
+      computes totals, physical regions, byte histograms and graph samples.
+      Expanded xxwidgets_entropy_* with validated statistics snapshots and a
+      reusable modal. Added cancellation, ownership and DIE comparison tests.
+
+    * Added native GUI File Information for the current path (Ctrl+I on
+      Windows, Cmd+I on macOS), using a cancellable shared DataStructs walker
+      and the reusable xxwidgets File Information browser. Extended typed
+      ENTRY field display and added GUI model, ownership and dialog tests.
+
+    * Added --info/-i, --struct/-S and --showstructs/-w using native
+      DataStructs for PE, ELF and thin Mach-O only, independently of signature
+      databases. Added field selection, table-entry expansion and all five
+      report formats, with generated 32/64-bit and byte-order tests.
+
+    * Added public generated-fixture compatibility tests and optional strict
+      diec output comparisons, with pinned-dependency CI on three platforms.
+    * Exposed all-types, overlay, resource and archive-member scans in the
+      console and native GUI options; TUI F2 opens the expansion controls.
+      Enabled native resource streams and retained format groups in the GUI.
+
     * Added PE.validateAmd64Unwind, a native implementation of the generic
       heuristic's AMD64 exception-table checks. The database retains its
       JavaScript fallback when the extension is missing or unavailable.

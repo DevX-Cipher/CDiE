@@ -76,10 +76,7 @@ extern "C" {
 /* --- Scan flags --------------------------------------------------------- */
 #define DIE_DEEPSCAN 0x00000001
 #define DIE_HEURISTICSCAN 0x00000002
-/* Accepted for source compatibility with die_library but inert: honouring it
- * would add a second result group and change the output shape, which would
- * break the byte-for-byte parity with diec this port is built around. See
- * docs/LIMITATIONS.md. */
+/* Includes applicable parent-format passes as separate result groups. */
 #define DIE_ALLTYPESSCAN 0x00000004
 #define DIE_RECURSIVESCAN 0x00000008
 #define DIE_VERBOSE 0x00000010

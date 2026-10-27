@@ -72,9 +72,15 @@ if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
         endfunction()
         cdie_add_widgets()
     endif()
+    add_library(cdie_ui_translation STATIC app/cdie_translation.c)
+    target_link_libraries(cdie_ui_translation PUBLIC xxwidgets::xxwidgets)
+    target_include_directories(cdie_ui_translation PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
+    if(MSVC)
+        target_compile_options(cdie_ui_translation PRIVATE /utf-8)
+    endif()
     if(MSVC AND CDIE_NO_CRT AND NOT BUILD_SHARED_LIBS)
         # Every embedded widget object must match the hosted frontend's CRT.
-        foreach(_widget_target xxwidgets xxwidgets_io xxwidgets_history
+        foreach(_widget_target cdie_ui_translation xxwidgets xxwidgets_io xxwidgets_history xxwidgets_translation
                 xxwidgets_threads xxwidgets_codepages xxwidgets_scan_colors)
             if(TARGET ${_widget_target})
                 set_property(TARGET ${_widget_target} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
@@ -88,6 +94,7 @@ endif()
 set(_CDIE_RESOURCES_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/gui/bundle_resources.cmake")
 set(_CDIE_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
 function(cdie_stage_frontend_resources target)
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS ${CDIE_TRANSLATION_CATALOGS})
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND "${CMAKE_COMMAND}"
             "-DDATABASE_DIR=${CDIE_DATABASE_DIR}"
@@ -95,6 +102,18 @@ function(cdie_stage_frontend_resources target)
             "-DCDIE_SOURCE_DIR=${_CDIE_SOURCE_DIR}"
             "-DCDISASM_DIR=${XXFC_CDISASM_DIR}"
             -P "${_CDIE_RESOURCES_SCRIPT}"
+        VERBATIM)
+endfunction()
+
+# The Windows GUI previously staged no databases at build time. Add only its
+# translation files; retain the existing database/resource staging elsewhere.
+function(cdie_stage_frontend_translations target)
+    set_property(TARGET ${target} APPEND PROPERTY LINK_DEPENDS ${CDIE_TRANSLATION_CATALOGS})
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND "${CMAKE_COMMAND}"
+            "-DRESOURCES_DIR=$<TARGET_FILE_DIR:${target}>"
+            "-DCDIE_SOURCE_DIR=${_CDIE_SOURCE_DIR}"
+            -DTRANSLATIONS_ONLY=ON -P "${_CDIE_RESOURCES_SCRIPT}"
         VERBATIM)
 endfunction()
 

@@ -31,12 +31,14 @@ set(X_MAINTAINER  "horsicq@gmail.com")
 
 # Compile only the optional format streams used by this application.
 if(NOT TARGET xxfclib::xxfclib)
-    set(XXFC_ENABLE_STREAM_DATASTRUCTS OFF)
-    set(XXFC_ENABLE_STREAM_IMPORT OFF)
-    set(XXFC_ENABLE_STREAM_EXPORT OFF)
-    set(XXFC_ENABLE_STREAM_RESOURCES OFF)
+    set(XXFC_ENABLE_STREAM_DATASTRUCTS ON)
+    set(XXFC_ENABLE_STREAM_IMPORT ON)
+    set(XXFC_ENABLE_STREAM_EXPORT ON)
+    # Resource expansion uses the native PE/ELF resource stream readers.
+    set(XXFC_ENABLE_STREAM_RESOURCES ON)
     set(XXFC_ENABLE_STREAM_METADATA OFF)
-    set(XXFC_ENABLE_STREAM_SYMBOLS OFF)
+    # ELF imports/exports enumerate symbols through the native cursor.
+    set(XXFC_ENABLE_STREAM_SYMBOLS ON)
 endif()
 
 set(CMAKE_C_STANDARD 99)
@@ -53,8 +55,8 @@ if(WIN32 OR APPLE)
 endif()
 option(CDIE_BUILD_GUI "Build the native desktop scanner" ${_CDIE_GUI_DEFAULT})
 unset(_CDIE_GUI_DEFAULT)
-if(CDIE_BUILD_GUI AND NOT (WIN32 OR APPLE))
-    message(FATAL_ERROR "The cdie native GUI currently supports Windows and macOS; use the TUI on this platform")
+if(CDIE_BUILD_GUI AND NOT (WIN32 OR APPLE OR (UNIX AND NOT APPLE)))
+    message(FATAL_ERROR "The cdie native GUI requires Windows, macOS, or a GTK desktop")
 endif()
 
 # The comprehensive private Radare2 gate covers each local library with a
@@ -93,6 +95,12 @@ if(CDIE_BUILD_PRIVATE_RADARE2_TESTS)
     # Configure the format suite in xxfclib's own directory so its private
     # tests retain the correct project source directory for internal headers.
     set(XXFC_BUILD_RADARE2_PRIVATE_TESTS ON)
+endif()
+
+# The GUI disassembler uses the existing x86 and ARM/Thumb/AArch64 decoders.
+option(CDIE_DISASM_ARM "Include ARM/Thumb/AArch64 in the GUI disassembler" ON)
+if(NOT (CDIE_BUILD_PRIVATE_ASM_TESTS OR CDIE_BUILD_PRIVATE_RADARE2_TESTS))
+    set(XXFC_CDISASM_ENABLE_ARM ${CDIE_DISASM_ARM})
 endif()
 
 # ------------------------------------------------------------------ xxfclib --
@@ -178,6 +186,39 @@ if(NOT TARGET xxfclib AND NOT TARGET xxfclib_static)
     endif()
     add_subdirectory("${XXFCLIB_DIR}" "${CMAKE_BINARY_DIR}/xxfclib" EXCLUDE_FROM_ALL)
 
+    # File Information deliberately exposes native DataStructs for these three
+    # executable families only. Keep the focused engine independent of the
+    # generic schema catalog (which is not shipped by every public mirror) and
+    # unrelated archive/.NET DataStructs providers. Other scan capabilities,
+    # including archive and resource scanning, keep their core readers.
+    if(TARGET die_engine)
+        get_target_property(_cdie_engine_sources die_engine SOURCES)
+        set(_cdie_info_sources)
+        foreach(_source IN LISTS _cdie_engine_sources)
+            if(_source MATCHES "/xx_.+_datastructs\\.c$" AND
+               NOT _source MATCHES "/xx_(pe|elf|macho|stream)_datastructs\\.c$")
+                continue()
+            endif()
+            list(APPEND _cdie_info_sources "${_source}")
+        endforeach()
+        set_property(TARGET die_engine PROPERTY SOURCES "${_cdie_info_sources}")
+        get_target_property(_cdie_engine_definitions die_engine COMPILE_DEFINITIONS)
+        set(_cdie_info_definitions)
+        foreach(_definition IN LISTS _cdie_engine_definitions)
+            if(_definition MATCHES "^XXFC_STREAM_HAS_(.+)=")
+                set(_cdie_stream_name "${CMAKE_MATCH_1}")
+                if(_cdie_stream_name MATCHES "^(PE|ELF|MACHO)$")
+                    list(APPEND _cdie_info_definitions "XXFC_STREAM_HAS_${_cdie_stream_name}=1")
+                else()
+                    list(APPEND _cdie_info_definitions "XXFC_STREAM_HAS_${_cdie_stream_name}=0")
+                endif()
+            else()
+                list(APPEND _cdie_info_definitions "${_definition}")
+            endif()
+        endforeach()
+        set_property(TARGET die_engine PROPERTY COMPILE_DEFINITIONS "${_cdie_info_definitions}")
+    endif()
+
     # The current xxfclib format readers need these POSIX compatibility
     # definitions when compiled as strict C11. Keep them on the dependency
     # target, as CXFileUnpacker does, so cdie's C99 flags stay independent.
@@ -194,6 +235,10 @@ if(NOT TARGET xxfclib AND NOT TARGET xxfclib_static)
             endif()
         endforeach()
     endif()
+endif()
+
+if(COMMAND xxfclib_require_streams AND TARGET xxfclib::die_engine)
+    xxfclib_require_streams(xxfclib::die_engine DATASTRUCTS)
 endif()
 
 # ------------------------------------------------------- language + warnings
@@ -230,6 +275,7 @@ if(NOT CDIE_DATABASE_DIR)
     endif()
 endif()
 
+file(GLOB CDIE_TRANSLATION_CATALOGS CONFIGURE_DEPENDS "${CMAKE_CURRENT_LIST_DIR}/translations/*.po")
 add_subdirectory(src)
 
 # --------------------------------------------------------------- library ----
@@ -245,23 +291,15 @@ endif()
 
 # ------------------------------------------------------------------- tests --
 #
-# Off by default: the tests are a developer tool, not part of the package, and
-# tests/ is not published to the git mirror at all -- hence the EXISTS guard,
-# so -DCDIE_BUILD_TESTS=ON on a released tree warns instead of failing to
-# configure.
-
-option(CDIE_BUILD_TESTS "Build the runtime test executable" OFF)
+# Public, generated-fixture integration tests. Private corpora remain optional.
+option(CDIE_BUILD_TESTS "Build the public compatibility tests" OFF)
 
 if(CDIE_BUILD_TESTS)
     if(NOT CDIE_BUILD_CONSOLE)
         message(FATAL_ERROR "CDIE_BUILD_TESTS requires CDIE_BUILD_CONSOLE=ON")
     endif()
-    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/tests/CMakeLists.txt")
-        enable_testing()
-        add_subdirectory(tests)
-    else()
-        message(WARNING "cdie: CDIE_BUILD_TESTS is ON but tests/ is not present in this tree")
-    endif()
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/private_tests/CMakeLists.txt")
@@ -400,3 +438,46 @@ set(CPACK_ARCHIVE_COMPONENT_INSTALL OFF)
 set(CPACK_COMPONENTS_ALL_IN_ONE_PACKAGE ON)
 
 include(CPack)
+
+# GUI/TUI localization is independent of console and engine compatibility tests.
+option(CDIE_BUILD_TRANSLATION_TESTS "Build interactive translation regressions" OFF)
+if(CDIE_BUILD_TRANSLATION_TESTS)
+    if(NOT TARGET cdie_ui_translation)
+        message(FATAL_ERROR "Translation tests require CDIE_BUILD_GUI or CDIE_BUILD_TUI")
+    endif()
+    enable_testing()
+    add_subdirectory(tests/translation)
+endif()
+find_program(CDIE_XGETTEXT_EXECUTABLE xgettext)
+if(CDIE_XGETTEXT_EXECUTABLE AND TARGET cdie_ui_translation)
+    file(GLOB_RECURSE _cdie_translation_inputs RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/*.c" "${CMAKE_CURRENT_SOURCE_DIR}/src/gui/*.m"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/tui/*.c")
+    get_target_property(_cdie_widgets_source xxwidgets::xxwidgets SOURCE_DIR)
+    file(GLOB_RECURSE _cdie_widget_inputs
+        "${_cdie_widgets_source}/src/*.c" "${_cdie_widgets_source}/src/*.m")
+    foreach(_source IN LISTS _cdie_widget_inputs)
+        file(RELATIVE_PATH _relative "${CMAKE_CURRENT_SOURCE_DIR}" "${_source}")
+        list(APPEND _cdie_translation_inputs "${_relative}")
+    endforeach()
+    add_custom_target(cdie_update_translations
+        COMMAND "${CDIE_XGETTEXT_EXECUTABLE}" --from-code=UTF-8
+            --keyword=CDIE_TR --keyword=CDIE_N_ --keyword=CDIE_FMT
+            --keyword=cdie_ns_tr --keyword=cdie_ns_fmt
+            --keyword=XXW_TR:2 --keyword=XXW_N_ --keyword=xxwidgets_app_gettext:2
+            --keyword=xxwidgets_app_ngettext:2,3 --flag=CDIE_FMT:1:c-format --flag=cdie_translation_snprintf:3:c-format
+            --flag=cdie_translation_swprintf:3:c-format --flag=CDIE_N_:1:pass-c-format
+            --flag=cdie_ns_fmt:1:objc-format
+            --sort-output --package-name=cdie --package-version=${CDIE_VERSION}
+            --output=translations/cdie.pot ${_cdie_translation_inputs}
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Extracting combined CDiE and xxwidgets translation catalog")
+endif()
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    install(DIRECTORY translations/ DESTINATION "${CMAKE_INSTALL_DATADIR}/cdie/translations"
+        FILES_MATCHING PATTERN "*.po" PATTERN "*.pot")
+else()
+    install(DIRECTORY translations/ DESTINATION translations
+        FILES_MATCHING PATTERN "*.po" PATTERN "*.pot")
+endif()

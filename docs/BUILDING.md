@@ -60,8 +60,9 @@ cmake --build cdie_build --target cdie cdie_tui cdie_gui --parallel
 cdie_build/src/tui/cdie_tui /path/to/target
 ```
 
-The three-target build above applies to macOS and Windows. On Linux, omit
-`cdie_gui`. The TUI accepts an optional startup file and shares the scanner's
+On Linux, enable the GTK GUI with `-DCDIE_BUILD_GUI=ON` and install the GTK 3
+development package (`gtk+-3.0` >= 3.16). Without it, omit `cdie_gui` from the
+build command. The TUI accepts an optional startup file and shares the scanner's
 engine, result tree, flag and database controls, and full report display.
 Use `cdie_tui --help` for terminal requirements and keyboard shortcuts.
 Run it in an interactive terminal rather than redirecting input or output;
@@ -74,6 +75,26 @@ scan panel provides flags, optional databases, a colored result tree and a
 cancellable progress dialog. Scans run on a worker thread. `-D`, `-E` and `-C`
 select signature directories; otherwise the executable-directory/working-directory
 search applies. The TUI uses a hosted C runtime, as the desktop GUI does.
+
+### Linux GTK GUI
+
+```bash
+cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release -DCDIE_BUILD_GUI=ON
+cmake --build cdie_build --target cdie_gui --parallel
+cdie_build/src/gui/cdie_gui /path/to/target
+```
+
+For a headless startup and scan check, run `xvfb-run -a
+cdie_build/src/gui/cdie_gui --smoke-test /path/to/target`. Signature databases
+selected by `CDIE_DATABASE_DIR` are staged beside the executable. The Linux
+frontend also opens without a database; use Database paths (F3) to load the main,
+extra and custom folders. Fonts (F4) edits the shared role-based font settings.
+Both settings apply for the current session.
+
+With `CDIE_BUILD_TESTS=ON` and `xvfb-run` installed, `cdie.linux_settings`
+exercises the actual GTK dialogs, failed-load rollback and retry, folder chooser
+acceptance/cancellation, default paths, font validation and rendered font changes.
+It repeats the checks without a database beside the executable to cover recovery.
 
 The build stages `db/`, `db_extra/`, and `db_custom/` from `CDIE_DATABASE_DIR`
 beside the console and TUI executables. The macOS GUI carries the same folders

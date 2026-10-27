@@ -57,6 +57,10 @@ const char *gui_backend_custom_db_path(void);
  * the previous paths and loaded database intact. */
 int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *pCustom);
 
+/* 1 when the paths, resolved as gui_backend_set_db_paths would, equal the
+ * loaded ones, so applying them needs no reload. */
+int gui_backend_db_paths_current(const char *pMain, const char *pExtra, const char *pCustom);
+
 /* Total number of signatures loaded across the three databases. */
 int gui_backend_signature_count(void);
 
@@ -80,6 +84,21 @@ void gui_backend_set_flags(int bDeep, int bHeuristic, int bVerbose, int bAggress
 
 /* Selects which databases contribute (the main database is always used). */
 void gui_backend_set_databases(int bUseExtra, int bUseCustom);
+
+enum {
+    GUI_SCAN_ALL_TYPES = 1u << 0,
+    GUI_SCAN_OVERLAYS = 1u << 1,
+    GUI_SCAN_RESOURCES = 1u << 2,
+    GUI_SCAN_ARCHIVES = 1u << 3,
+    GUI_SCAN_MODES_MASK = 15u,
+    GUI_SCAN_MODES_DEFAULT = GUI_SCAN_OVERLAYS
+};
+
+/* Expansion modes apply to both the tree and its report. Overlay scanning is
+ * enabled initially, preserving the interactive frontend's existing default.
+ * Invalid bits leave the current settings unchanged. Call between scans. */
+unsigned int gui_backend_get_scan_modes(void);
+int gui_backend_set_scan_modes(unsigned int modes);
 
 typedef struct gui_backend_optimization_options {
     size_t buffer_size;
