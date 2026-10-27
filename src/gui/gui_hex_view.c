@@ -1,0 +1,54 @@
+/* Copyright (c) 2026 hors<horsicq@gmail.com>. SPDX-License-Identifier: MIT */
+#include "app/cdie_translation.h"
+#include "gui_hex_view.h"
+#include "../app/cdie_app.h"
+#include <xxfclib/rt/xx_rt.h>
+
+static xxwidgets_hex_options g_hex_options;
+static int g_hex_options_set;
+
+void gui_hex_view_get_options(xxwidgets_hex_options *options)
+{
+    if (!options) return;
+    if (!g_hex_options_set) { xxwidgets_hex_options_init(&g_hex_options); g_hex_options_set = 1; }
+    *options = g_hex_options;
+}
+
+void gui_hex_view_set_options(const xxwidgets_hex_options *options)
+{
+    if (!options) return;
+    g_hex_options = *options;
+    g_hex_options.editable = 0;
+    g_hex_options_set = 1;
+}
+
+int gui_hex_view_open(const char *path, xx_io_device **out, char **error)
+{
+    xx_io_device *device;
+    if (!out || !error) return 0;
+    *out = NULL; *error = NULL;
+    device = path && *path ? xx_io_file_open(path, "rb") : NULL;
+    if (!device) { *error = cdie_strdup("Cannot open file for Hex View"); return 0; }
+    if (xx_io_total_size(device) < 0) {
+        xx_io_close(device); *error = cdie_strdup("Cannot determine file size"); return 0;
+    }
+    *out = device; return 1;
+}
+xxwidgets_status gui_hex_view_show(xxwidgets_widget *owner, const char *path)
+{
+    xx_io_device *device = NULL;
+    char *error = NULL;
+    xxwidgets_status status;
+    if (!owner || !path || !*path) return XXWIDGETS_INVALID_ARGUMENT;
+    if (!gui_hex_view_open(path, &device, &error)) {
+        status = xxwidgets_text_dialog(owner, CDIE_TR("Hex View"), error ? error : "Cannot open file");
+        xx_rt_free(error); return status;
+    }
+    {
+        xxwidgets_hex_options options;
+        gui_hex_view_get_options(&options);
+        status = xxwidgets_hexview_dialog_with_options(owner, CDIE_TR("Hex View"), path, device, &options);
+    }
+    xx_io_close(device);
+    return status;
+}

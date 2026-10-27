@@ -1,0 +1,23 @@
+/* Copyright (c) 2026 hors<horsicq@gmail.com>. SPDX-License-Identifier: MIT */
+#ifndef CDIE_GUI_FILE_INFORMATION_H
+#define CDIE_GUI_FILE_INFORMATION_H
+#include <xxwidgets/xxwidgets_file_information.h>
+
+typedef struct gui_file_information_data {
+    char *path, *file_type;
+    int64_t size;
+    xxwidgets_data_struct_item *items;
+    size_t count, capacity, bytes, field_capacity;
+} gui_file_information_data;
+
+/* Worker-safe native DataStructs collection, independent of signature state.
+ * No widget calls. The result owns ordinary C allocations; error, when set,
+ * is released with gui_backend_free. Failures/cancellation return no model. */
+int gui_file_information_read(const char *path, xx_pd_struct *progress,
+    gui_file_information_data **data, char **error);
+void gui_file_information_free(gui_file_information_data *data);
+
+/* UI thread, outside input dispatch. Loads with cancellable worker progress,
+ * then displays the reusable xxwidgets modal browser. */
+xxwidgets_status gui_file_information_show(xxwidgets_widget *owner, const char *path);
+#endif
