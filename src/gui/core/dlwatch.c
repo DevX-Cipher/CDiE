@@ -163,7 +163,7 @@ static void quick_cb(const char* type, const char* name, const char* version,
   quick_scan* q = (quick_scan*)u;
   size_t used;
 
-  if (!type || (!ci_contains(type, "Packer") && !ci_contains(type, "Protector")))
+  if (!type || (!ci_contains(type, "Packer") && !ci_contains(type, "Protector")) && !ci_contains(type, "Malware"))
     return;
 
   q->count++;
