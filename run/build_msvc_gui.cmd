@@ -13,7 +13,9 @@ rem Dependencies (dep\xxwidgets, dep\xxfclib): if no prebuilt .lib is found,
 rem they are configured and built automatically with CMake (Release, static
 rem CRT /MT) into dep\<name>\build, then picked up.
 rem
-rem Usage (from any prompt):  run\build_msvc_gui.cmd [clean | cleanall | rebuild]
+rem Usage (from any prompt):  run\build_msvc_gui.cmd [clean | cleanall | rebuild] [store] [installer]
+rem   store      build with /DCDIE_STORE_BUILD
+rem   installer  after the app builds, also run run\build_installer.cmd
 rem   clean      delete build_msvc (objects, .res, exe); dependencies are kept
 rem   cleanall   clean, and also delete dep\xxwidgets\build and dep\xxfclib\build
 rem   rebuild    clean, then build
@@ -33,12 +35,18 @@ set "GUI=%SRC%\gui"
 set "DEP=%ROOT%\dep"
 set "RES=%GUI%\resource"
 set "STORE_BUILD=0"
-if /i "%~1"=="store" set "STORE_BUILD=1"
+set "BUILD_INSTALLER=0"
+set "DO_REBUILD="
+for %%a in (%*) do (
+    if /i "%%~a"=="store"     set "STORE_BUILD=1"
+    if /i "%%~a"=="installer" set "BUILD_INSTALLER=1"
+    if /i "%%~a"=="rebuild"   set "DO_REBUILD=1"
+)
 
 rem --- Clean targets (no Visual Studio environment needed) -------------------
 if /i "%~1"=="clean"    call :do_clean     & exit /b 0
 if /i "%~1"=="cleanall" call :do_clean all & exit /b 0
-if /i "%~1"=="rebuild"  call :do_clean
+if defined DO_REBUILD   call :do_clean
 
 rem --- Visual Studio x64 environment (needed for cl and cmake) ---------------
 if not defined VSCMD_VER (
@@ -148,6 +156,7 @@ set "GUI_SOURCES="
 for /r "%SRC%" %%f in (*.c) do (
     set "skip="
     echo %%~dpf| findstr /i "\\gui\\" >nul && set "skip=1"
+	echo %%~dpf| findstr /i "\\installer\\" >nul && set "skip=1"
     if /i "%%~nxf"=="utils_entry.c" set "skip=1"
     if /i "%%~nxf"=="main_console.c" set "skip=1"
     if not defined skip set "GUI_SOURCES=!GUI_SOURCES! "%%f""
@@ -189,6 +198,13 @@ if errorlevel 1 ( echo BUILD FAILED ^(cdie_gui.exe^) & exit /b 1 )
 echo.
 echo Built in %OUT%\ :
 echo   cdie_gui.exe
+
+if "%BUILD_INSTALLER%"=="1" (
+    echo.
+    echo Building installer...
+    call "%SRC%\installer\build_installer.cmd"
+    if errorlevel 1 ( echo INSTALLER BUILD FAILED & exit /b 1 )
+)
 endlocal
 exit /b 0
 
