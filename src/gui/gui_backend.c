@@ -34,7 +34,13 @@
 #include <xxfclib/die_engine/die_engine_debug.h>
 #include <xxfclib/js/xx_js.h>
 #include <xxfclib/buf/xx_buf.h>
+#include <xxfclib/formats/executable/elf/xx_elf.h>
+#include <xxfclib/formats/executable/macho/xx_macho.h>
+#include <xxfclib/formats/executable/pe/xx_pe.h>
+/* xx_format.h aliases fileType for format code; the scan result's member is fileType. */
+#undef fileType
 #include <xxfclib/fs/xx_fs.h>
+#include <xxfclib/io/xx_io.h>
 #include <xxfclib/strings/xx_string.h>
 #include <xxfclib/global/xx_global.h>
 #include <xxfclib/rt/xx_rt.h>
@@ -389,8 +395,108 @@ int gui_backend_scan_results(const char *pUtf8Path, gui_backend_result_fn pResul
     return gui_backend_scan_results_type(pUtf8Path, 0, pResultFn, pUserData, ppResultText, ppTypeName);
 }
 
+/* Bits per address for DIE's Mode field; 0 when the architecture says nothing. */
+static int arch_bits(xx_arch_t arch)
+{
+    switch (arch) {
+    case XX_ARCH_X86_64: case XX_ARCH_ARM64: case XX_ARCH_MIPS64: case XX_ARCH_PPC64: case XX_ARCH_RISCV64: case XX_ARCH_SPARC64: return 64;
+    case XX_ARCH_X86: case XX_ARCH_ARM: case XX_ARCH_MIPS: case XX_ARCH_PPC: case XX_ARCH_RISCV: case XX_ARCH_SPARC:
+    case XX_ARCH_M68K: case XX_ARCH_SH: case XX_ARCH_ARC: case XX_ARCH_HPPA: return 32;
+    case XX_ARCH_X86_16: case XX_ARCH_Z80: return 16;
+    case XX_ARCH_AVR: return 8;
+    default: return 0;
+    }
+}
+
+/* The names DIE gives what the parser found. */
+static const char *arch_name(xx_arch_t arch)
+{
+    switch (arch) {
+    case XX_ARCH_X86_16: return "8086";
+    case XX_ARCH_X86: return "I386";
+    case XX_ARCH_X86_64: return "AMD64";
+    case XX_ARCH_ARM: return "ARM";
+    case XX_ARCH_ARM64: return "ARM64";
+    case XX_ARCH_MIPS: return "MIPS";
+    case XX_ARCH_MIPS64: return "MIPS64";
+    case XX_ARCH_PPC: return "PPC";
+    case XX_ARCH_PPC64: return "PPC64";
+    case XX_ARCH_RISCV: return "RISCV";
+    case XX_ARCH_RISCV64: return "RISCV64";
+    case XX_ARCH_SPARC: return "SPARC";
+    case XX_ARCH_SPARC64: return "SPARC64";
+    case XX_ARCH_M68K: return "68K";
+    case XX_ARCH_UNKNOWN: return "";
+    default: return xx_arch_to_string(arch);
+    }
+}
+
+static const char *type_name(xx_format_type_t type)
+{
+    switch (type) {
+    case XX_TYPE_GUI_APPLICATION: return "GUI";
+    case XX_TYPE_CONSOLE_APPLICATION: return "Console";
+    case XX_TYPE_LIBRARY: return "DLL";
+    default: return xx_type_to_string(type);
+    }
+}
+
+static void copy_field(char *field, size_t capacity, const char *text)
+{
+    xx_rt_snprintf(field, capacity, "%s", text && xx_rt_strcmp(text, "Unknown") ? text : "");
+}
+
+/* The format parser's view of the main input, as DIE shows it above the
+ * tree, for the executable families the engine's readers cover. */
+static void describe_input(const char *path, const xx_scan_result *result, gui_backend_scan_info *info)
+{
+    xx_pe pe;
+    xx_elf elf;
+    xx_macho macho;
+    Abstractformat *format = NULL;
+    xx_io_device *device;
+    xx_endian_t endian;
+    xx_arch_t arch;
+    int bits;
+    (void)result;
+    if (!(device = xx_io_file_open(path, "rb"))) return;
+    xx_rt_memset(&pe, 0, sizeof(pe)); xx_rt_memset(&elf, 0, sizeof(elf)); xx_rt_memset(&macho, 0, sizeof(macho));
+    xx_pe_init(&pe, device, 0);
+    xx_elf_init(&elf, device, 0);
+    xx_macho_init(&macho, device, 0);
+    {
+        /* The first reader that accepts the file. */
+        Abstractformat *candidates[3] = {&pe.format, &elf.format, &macho.format};
+        for (int i = 0; i < 3 && !format; ++i)
+            if (candidates[i]->check_is_valid && candidates[i]->check_is_valid(candidates[i], NULL)) format = candidates[i];
+    }
+    if (format && (!format->handle_base_info || format->handle_base_info(format, NULL))) {
+        endian = format->get_endian ? format->get_endian(format) : format->endian;
+        arch = format->get_arch ? format->get_arch(format) : format->arch;
+        copy_field(info->endianness, sizeof(info->endianness), endian == XX_ENDIAN_LITTLE ? "LE" : endian == XX_ENDIAN_BIG ? "BE" : "");
+        bits = arch_bits(arch);
+        if (bits) xx_rt_snprintf(info->mode, sizeof(info->mode), "%d-bit", bits);
+        copy_field(info->architecture, sizeof(info->architecture), arch_name(arch));
+        copy_field(info->type, sizeof(info->type), type_name(format->get_type ? format->get_type(format) : format->format_type));
+    }
+    xx_pe_destroy(&pe); xx_elf_destroy(&elf); xx_macho_destroy(&macho);
+    xx_io_close(device);
+}
+
+static char *join_errors(const xx_scan_result *result)
+{
+    xx_buf_t log;
+    int i;
+    xx_buf_init(&log);
+    for (i = 0; i < result->nErrorCount; ++i)
+        if (result->ppErrors && result->ppErrors[i] && result->ppErrors[i][0]) xx_buf_appendf(&log, "%s\n", result->ppErrors[i]);
+    if (!log.size) xx_buf_append_str(&log, "");
+    return xx_buf_detach(&log, NULL);
+}
+
 static int scan_results_impl(const char *pUtf8Path, int nTypeId,
-    gui_backend_result_fn pResultFn, void *pUserData, char **ppResultText, char **ppTypeName, gui_backend_tree_fn tree_fn, xx_pd_struct *pProgress)
+    gui_backend_result_fn pResultFn, void *pUserData, char **ppResultText, char **ppTypeName, gui_backend_tree_fn tree_fn,
+    gui_backend_scan_info *pInfo, xx_pd_struct *pProgress)
 {
     xx_scan_result result;
     char *pText = NULL;
@@ -433,6 +539,11 @@ static int scan_results_impl(const char *pUtf8Path, int nTypeId,
 
     if (tree_fn && !gui_result_tree_emit(&result, g_options.hide_unknown, tree_fn, pUserData))
         goto scan_allocation_failed;
+    if (pInfo) {
+        describe_input(pUtf8Path, &result, pInfo);
+        pInfo->log = join_errors(&result);
+        if (!pInfo->log) goto scan_allocation_failed;
+    }
 
     for (i = 0; pResultFn && i < result.nCount; ++i) {
         xx_scan_record *pRecord = &result.pRecords[i];
@@ -623,14 +734,62 @@ char *gui_backend_info_text(const char *name)
 int gui_backend_scan_results_type(const char *path, int type_id, gui_backend_result_fn callback,
     void *user, char **report, char **type_name)
 {
-    return scan_results_impl(path, type_id, callback, user, report, type_name, NULL, NULL);
+    return scan_results_impl(path, type_id, callback, user, report, type_name, NULL, NULL, NULL);
 }
 
 int gui_backend_scan_tree(const char *path, int type_id, gui_backend_tree_fn callback,
-    void *user, char **report, char **type_name, xx_pd_struct *progress)
+    void *user, char **report, char **type_name, gui_backend_scan_info *info, xx_pd_struct *progress)
 {
+    if (info) xx_rt_memset(info, 0, sizeof(*info));
     if (!callback) return 0;
-    return scan_results_impl(path, type_id, NULL, user, report, type_name, callback, progress);
+    return scan_results_impl(path, type_id, NULL, user, report, type_name, callback, info, progress);
+}
+
+int gui_backend_scan_detections(const char *path, unsigned int flags, unsigned int databases,
+    gui_backend_detection_fn callback, void *user)
+{
+    xx_scan_options options;
+    xx_scan_result result;
+    int i;
+    if (!g_bInited || !path || !path[0] || !callback) return 0;
+    options = g_options;
+    options.deep_scan = (flags & 1u) != 0;
+    options.heuristic_scan = (flags & 2u) != 0;
+    options.verbose = (flags & 4u) != 0;
+    options.aggressive_scan = (flags & 8u) != 0;
+    options.hide_unknown = (flags & 16u) != 0;
+    options.use_extra_database = (databases & 1u) != 0;
+    options.use_custom_database = (databases & 2u) != 0;
+    if (!die_engine_scan_file_type_pd(path, &g_db, &options, XFT_UNKNOWN, &result, NULL)) {
+        xx_scan_result_free(&result);
+        return 0;
+    }
+    for (i = 0; i < result.nCount; ++i) {
+        const xx_scan_record *record = &result.pRecords[i];
+        if (record->is_unknown && options.hide_unknown) continue;
+        callback(record->type ? record->type : "", record->name ? record->name : "",
+            record->version ? record->version : "", record->info ? record->info : "", user);
+    }
+    xx_scan_result_free(&result);
+    return 1;
+}
+
+int gui_backend_signature_entry(int index, const char **display, const char **path)
+{
+    const DBSignature *record;
+    const char *full, *base, *folder, *s;
+    if (!g_bInited || index < 0 || index >= g_db.nCount) return 0;
+    record = &g_db.pRecords[index];
+    full = record->pFilePath && record->pFilePath[0] ? record->pFilePath : record->pName;
+    if (path) *path = full;
+    if (display) {
+        /* The folder and file name: "PE/_Microsoft.6.sg". */
+        base = folder = full;
+        for (s = full; *s; ++s)
+            if (*s == '/' || *s == '\\') { folder = base; base = s + 1; }
+        *display = folder;
+    }
+    return 1;
 }
 
 void gui_backend_free(void *pPtr)

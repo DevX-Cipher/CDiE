@@ -112,6 +112,8 @@ static xxwidgets_widget *g_window, *g_fileLabel, *g_path, *g_browse, *g_type;
 static xxwidgets_widget *g_flags, *g_databases, *g_msec, *g_scan, *g_results;
 static xxwidgets_widget *g_typeLabel, *g_flagLabel, *g_databaseLabel;
 static xxwidgets_widget *g_includeTags, *g_excludeTags, *g_includeTagsLabel, *g_excludeTagsLabel;
+/* DIE's panel: Signatures, Directory and Log buttons, the file's facts. */
+static xxwidgets_widget *g_signaturesButton, *g_directoryButton, *g_logButton, *g_facts[4], *g_factLabels[4];
 static xxwidgets_widget *g_options, *g_aboutButton, *g_reportButton, *g_exit, *g_status;
 static xxwidgets_widget *g_fileInformationButton, *g_entropyButton, *g_hashButton, *g_stringsButton, *g_hexViewButton, *g_disasmButton, *g_memoryMapButton, *g_importsButton, *g_exportsButton, *g_resourcesButton, *g_symbolsButton;
 static xxwidgets_scan_panel *g_panel;
@@ -332,7 +334,6 @@ static void do_scan(void)
 {
     SIZE_T required = 0;
     char *path, *type = NULL;
-    LARGE_INTEGER frequency, started, ended;
     xxwidgets_status status;
     int ok, cancelled = 0, type_id = 0;
 
@@ -367,27 +368,18 @@ static void do_scan(void)
     xxwidgets_widget_set_enabled(g_type, 0);
     xxwidgets_widget_set_text(g_msec, CDIE_TR("Scanning..."));
     xxwidgets_widget_set_text(g_status, CDIE_TR("Scanning the selected file..."));
-    QueryPerformanceFrequency(&frequency);
-    QueryPerformanceCounter(&started);
     /* The engine runs on a worker; the process dialog keeps the window
-     * responsive, disables it meanwhile, and offers Cancel after a second. */
+     * responsive, disables it meanwhile, and offers Cancel after a second.
+     * The panel shows the time it took. */
     ok = gui_tree_scan(g_window, g_panel, path, type_id, &type, &cancelled);
-    QueryPerformanceCounter(&ended);
     if (ok) {
         WCHAR text[512];
-        unsigned int msec = frequency.QuadPart > 0
-            ? (unsigned int)(((ended.QuadPart - started.QuadPart) * 1000) / frequency.QuadPart) : 0;
         WCHAR *type_name = xx_str_utf8_to_unicode(type && type[0] ? type : "Unknown type");
         size_t count = xxwidgets_scan_panel_count(g_panel);
-        cdie_translation_swprintf(text, sizeof(text)/sizeof(text[0]), CDIE_N_(L"Scan complete (%s). %u result%s. Use Report for the full engine output."),
+        cdie_translation_swprintf(text, sizeof(text)/sizeof(text[0]), CDIE_N_(L"Scan complete (%s). %u result%s. Use > for the full engine output."),
                   type_name ? type_name : L"Unknown type", (unsigned int)count, count == 1 ? L"" : L"s");
         set_status_wide(text);
         if (type_name) xx_str_wfree(type_name);
-        cdie_translation_swprintf(text, sizeof(text)/sizeof(text[0]), CDIE_N_(L"%u msec"), msec);
-        {
-            char *utf8 = xx_str_unicode_to_utf8(text);
-            if (utf8) { xxwidgets_widget_set_text(g_msec, utf8); xx_str_free(utf8); }
-        }
     } else {
         xxwidgets_widget_set_text(g_status, cancelled ? CDIE_TR("Scan cancelled.") : CDIE_TR("Cannot scan the file."));
         xxwidgets_widget_set_text(g_msec, "");
@@ -801,14 +793,15 @@ static void layout(void)
 {
     RECT bounds, window_bounds;
     TEXTMETRICW metrics, edit_metrics;
-    int width, height, results_bottom, row = 26, label = 16, path_y, label_y, choices_y;
-    int tag_label_y, tag_choices_y, results_y;
-    int settings_width[5], settings_x, required_width, status_height = 36;
-    int type_width, flags_width, databases_width, flags_x, databases_x;
-    int include_tags_width, exclude_tags_width, tag_column_width;
-    int scan_width, browse_width, about_width, report_width, information_width, entropy_width, hash_width, strings_width, hex_width, disasm_width, memory_map_width, exit_width;
-    const int margin = 10, gap = 8;
+    int width, height, row = 26, label = 16, i, x, path_y, fact_label_y, fact_y, results_y, results_bottom;
+    int row_a, row_b, status_y, tools_y, tools2_y, required_width, status_height = 36, fact_width = 90, type_width;
+    int scan_width, browse_width, signatures_width, flags_width, databases_width, tags_width, directory_width, log_width;
+    int report_width, elapsed_width = 100, settings_width[5], tool_width[9], exit_width, tags_room;
+    xxwidgets_widget *tools[9];
+    const int margin = 10, gap = 8, spacing = 6;
     if (!g_results) return;
+    tools[0] = g_aboutButton; tools[1] = g_fileInformationButton; tools[2] = g_entropyButton; tools[3] = g_hashButton;
+    tools[4] = g_stringsButton; tools[5] = g_hexViewButton; tools[6] = g_disasmButton; tools[7] = g_memoryMapButton; tools[8] = NULL;
     metrics = control_font_metrics(g_scan);
     edit_metrics = control_font_metrics(g_path);
     if (metrics.tmHeight + metrics.tmExternalLeading + 10 > row)
@@ -818,101 +811,112 @@ static void layout(void)
     if (metrics.tmHeight + metrics.tmExternalLeading + 2 > label)
         label = metrics.tmHeight + metrics.tmExternalLeading + 2;
     if (2 * label > status_height) status_height = 2 * label;
-    scan_width = control_text_width(g_scan, 92);
+    scan_width = control_text_width(g_scan, 110);
     browse_width = control_text_width(g_browse, 44);
-    about_width = control_text_width(g_aboutButton, 92);
-    report_width = control_text_width(g_reportButton, 92);
-    information_width = control_text_width(g_fileInformationButton, 150);
-    entropy_width = control_text_width(g_entropyButton, 90);
-    hash_width = control_text_width(g_hashButton, 80);
-    strings_width = control_text_width(g_stringsButton, 90);
-    hex_width = control_text_width(g_hexViewButton, 100);
-    disasm_width = control_text_width(g_disasmButton, 90);
-    memory_map_width = control_text_width(g_memoryMapButton, 120);
+    signatures_width = control_text_width(g_signaturesButton, 92);
+    directory_width = control_text_width(g_directoryButton, 92);
+    log_width = control_text_width(g_logButton, 70);
+    report_width = control_text_width(g_reportButton, 36);
+    flags_width = combo_text_width(g_flags, 130);
+    databases_width = combo_text_width(g_databases, 130);
     exit_width = control_text_width(g_exit, 92);
-    type_width = combo_text_width(g_type, control_text_width(g_typeLabel, 190));
-    flags_width = combo_text_width(g_flags, control_text_width(g_flagLabel, 180));
-    databases_width = combo_text_width(g_databases, control_text_width(g_databaseLabel, 170));
-    /* Signature databases are user-extensible, so a tag can be arbitrarily
-     * long.  Keep the selectors comfortably usable without letting one tag
-     * force the window's hard minimum wider than the monitor; the native
-     * combo keeps the full text available in its drop-down. */
-    include_tags_width = control_text_width(g_includeTagsLabel, 250);
-    exclude_tags_width = control_text_width(g_excludeTagsLabel, 250);
-    flags_x = margin + type_width + gap;
-    databases_x = flags_x + flags_width + gap;
+    for (i = 0; i < 4; ++i) {
+        int needed = control_text_width(g_factLabels[i], 60) + 16;
+        if (needed > fact_width) fact_width = needed;
+    }
     settings_width[0] = control_text_width(g_options, 110);
     settings_width[1] = control_text_width(g_importsButton, 90);
     settings_width[2] = control_text_width(g_exportsButton, 90);
     settings_width[3] = control_text_width(g_resourcesButton, 110);
     settings_width[4] = control_text_width(g_symbolsButton, 90);
-    required_width = settings_width[0] + settings_width[1] + settings_width[2] + settings_width[3] +
-        settings_width[4] + 24 + 2 * margin;
-    if (databases_x + databases_width + gap + scan_width + margin > required_width)
-        required_width = databases_x + databases_width + gap + scan_width + margin;
-    if (about_width + report_width + information_width + entropy_width + hash_width + strings_width + hex_width + disasm_width + memory_map_width + exit_width + 54 + 2 * margin > required_width)
-        required_width = about_width + report_width + information_width + entropy_width + hash_width + strings_width + hex_width + disasm_width + memory_map_width + exit_width + 54 + 2 * margin;
+    for (i = 0; tools[i]; ++i) tool_width[i] = control_text_width(tools[i], i == 1 ? 150 : 90);
+    /* The widest of: the tool rows, DIE's top row, the two button rows. */
+    required_width = 2 * margin + exit_width + gap;
+    for (i = 0; tools[i]; ++i) required_width += tool_width[i] + spacing;
+    x = 2 * margin + settings_width[0] + settings_width[1] + settings_width[2] + settings_width[3] + settings_width[4] + 4 * spacing;
+    if (x > required_width) required_width = x;
+    x = 2 * margin + 190 + 4 * (fact_width + spacing);
+    if (x > required_width) required_width = x;
+    x = 2 * margin + signatures_width + flags_width + databases_width + 2 * 120 + 5 * spacing + gap + scan_width;
+    if (x > required_width) required_width = x;
+    x = 2 * margin + directory_width + log_width + report_width + elapsed_width + 3 * spacing + 2 * gap + scan_width;
+    if (x > required_width) required_width = x;
     if (30 * edit_metrics.tmAveCharWidth + browse_width + gap + 2 * margin > required_width)
         required_width = 30 * edit_metrics.tmAveCharWidth + browse_width + gap + 2 * margin;
-    if (include_tags_width + exclude_tags_width + gap + 2 * margin > required_width)
-        required_width = include_tags_width + exclude_tags_width + gap + 2 * margin;
     path_y = margin + label + 2;
-    label_y = path_y + row + gap;
-    choices_y = label_y + label + 2;
-    tag_label_y = choices_y + row + gap;
-    tag_choices_y = tag_label_y + label + 2;
-    results_y = tag_choices_y + row + 10;
+    fact_label_y = path_y + row + gap;
+    fact_y = fact_label_y + label + 2;
+    results_y = fact_y + row + gap;
     GetClientRect(native(g_window), &bounds);
     width = bounds.right; height = bounds.bottom;
     GetWindowRect(native(g_window), &window_bounds);
     g_minWindowWidth = required_width + (window_bounds.right - window_bounds.left - width);
     if (g_minWindowWidth < 720) g_minWindowWidth = 720;
-    g_minWindowHeight = results_y + 60 + status_height + 3 * gap + 2 * row + margin +
+    g_minWindowHeight = results_y + 60 + 4 * row + status_height + 5 * gap + 4 + margin +
         (window_bounds.bottom - window_bounds.top - height);
-    if (g_minWindowHeight < 380) g_minWindowHeight = 380;
+    if (g_minWindowHeight < 420) g_minWindowHeight = 420;
+    /* From the bottom: two tool rows, the status, DIE's two button rows. */
+    tools2_y = height - margin - row;
+    tools_y = tools2_y - gap - row;
+    status_y = tools_y - gap - status_height;
+    row_b = status_y - gap - row;
+    row_a = row_b - 4 - row;
+    results_bottom = row_a - gap;
+    if (results_bottom < results_y + 40) results_bottom = results_y + 40;
     MoveWindow(native(g_fileLabel), margin, margin, width - 2 * margin, label, TRUE);
     MoveWindow(native(g_path), margin, path_y, width - 2 * margin - browse_width - gap, row, TRUE);
     MoveWindow(native(g_browse), width - margin - browse_width, path_y, browse_width, row, TRUE);
-    MoveWindow(native(g_typeLabel), margin, label_y, type_width, label, TRUE);
+    /* Top row: Scan (the file type) and the file's Endianness, Mode, Architecture, Type. */
+    type_width = width - 2 * margin - 4 * (fact_width + spacing);
+    MoveWindow(native(g_typeLabel), margin, fact_label_y, type_width, label, TRUE);
     /* ComboBox height includes its dropdown list. */
     SendMessageW(native(g_type), CB_SETITEMHEIGHT, (WPARAM)-1, row - 6);
     SendMessageW(native(g_type), CB_SETITEMHEIGHT, 0, row - 6);
-    MoveWindow(native(g_type), margin, choices_y, type_width, row + 10 * row, TRUE);
-    MoveWindow(native(g_flagLabel), flags_x, label_y, flags_width, label, TRUE);
-    MoveWindow(native(g_flags), flags_x, choices_y, flags_width, row, TRUE);
-    MoveWindow(native(g_databaseLabel), databases_x, label_y, databases_width, label, TRUE);
-    MoveWindow(native(g_databases), databases_x, choices_y, databases_width, row, TRUE);
-    MoveWindow(native(g_msec), width - margin - scan_width, label_y, scan_width, label, TRUE);
-    MoveWindow(native(g_scan), width - margin - scan_width, choices_y, scan_width, row, TRUE);
-    tag_column_width = (width - 2 * margin - gap) / 2;
-    MoveWindow(native(g_includeTagsLabel), margin, tag_label_y, tag_column_width, label, TRUE);
-    MoveWindow(native(g_includeTags), margin, tag_choices_y, tag_column_width, row, TRUE);
-    MoveWindow(native(g_excludeTagsLabel), margin + tag_column_width + gap, tag_label_y, tag_column_width, label, TRUE);
-    MoveWindow(native(g_excludeTags), margin + tag_column_width + gap, tag_choices_y, tag_column_width, row, TRUE);
-    results_bottom = height - margin - 2 * row - 3 * gap - status_height;
-    if (results_bottom < results_y + 40) results_bottom = results_y + 40;
+    MoveWindow(native(g_type), margin, fact_y, type_width, row + 10 * row, TRUE);
+    for (i = 0; i < 4; ++i) {
+        x = margin + type_width + spacing + i * (fact_width + spacing);
+        MoveWindow(native(g_factLabels[i]), x, fact_label_y, fact_width, label, TRUE);
+        MoveWindow(native(g_facts[i]), x, fact_y, fact_width, row, TRUE);
+    }
     MoveWindow(native(g_results), margin, results_y, width - 2 * margin, results_bottom - results_y, TRUE);
-    MoveWindow(native(g_status), margin, results_bottom + gap, width - 2 * margin, status_height, TRUE);
-    settings_x = margin;
-    MoveWindow(native(g_options), settings_x, height - margin - 2 * row - gap, settings_width[0], row, TRUE);
-    settings_x += settings_width[0] + 6;
-    MoveWindow(native(g_importsButton), settings_x, height - margin - 2 * row - gap, settings_width[1], row, TRUE);
-    settings_x += settings_width[1] + 6;
-    MoveWindow(native(g_exportsButton), settings_x, height - margin - 2 * row - gap, settings_width[2], row, TRUE);
-    settings_x += settings_width[2] + 6;
-    MoveWindow(native(g_resourcesButton), settings_x, height - margin - 2 * row - gap, settings_width[3], row, TRUE);
-    settings_x += settings_width[3] + 6;
-    MoveWindow(native(g_symbolsButton), settings_x, height - margin - 2 * row - gap, settings_width[4], row, TRUE);
-    MoveWindow(native(g_aboutButton), margin, height - margin - row, about_width, row, TRUE);
-    MoveWindow(native(g_reportButton), margin + about_width + 6, height - margin - row, report_width, row, TRUE);
-    MoveWindow(native(g_fileInformationButton), margin + about_width + report_width + 12, height - margin - row, information_width, row, TRUE);
-    MoveWindow(native(g_entropyButton), margin + about_width + report_width + information_width + 18, height - margin - row, entropy_width, row, TRUE);
-    MoveWindow(native(g_hashButton), margin + about_width + report_width + information_width + entropy_width + 24, height - margin - row, hash_width, row, TRUE);
-    MoveWindow(native(g_stringsButton), margin + about_width + report_width + information_width + entropy_width + hash_width + 30, height - margin - row, strings_width, row, TRUE);
-    MoveWindow(native(g_hexViewButton), margin + about_width + report_width + information_width + entropy_width + hash_width + strings_width + 36, height - margin - row, hex_width, row, TRUE);
-    MoveWindow(native(g_disasmButton), margin + about_width + report_width + information_width + entropy_width + hash_width + strings_width + hex_width + 42, height - margin - row, disasm_width, row, TRUE);
-    MoveWindow(native(g_memoryMapButton), margin + about_width + report_width + information_width + entropy_width + hash_width + strings_width + hex_width + disasm_width + 48, height - margin - row, memory_map_width, row, TRUE);
-    MoveWindow(native(g_exit), width - margin - exit_width, height - margin - row, exit_width, row, TRUE);
+    /* Signatures, Flags, Database, the tag filters | a tall Scan button. */
+    MoveWindow(native(g_scan), width - margin - scan_width, row_a, scan_width, row_b + row - row_a, TRUE);
+    tags_room = width - 2 * margin - scan_width - gap - signatures_width - flags_width - databases_width - 4 * spacing;
+    tags_width = tags_room / 2 > 250 ? 250 : tags_room / 2;
+    if (tags_width < 60) tags_width = 60;
+    x = margin;
+    MoveWindow(native(g_signaturesButton), x, row_a, signatures_width, row, TRUE);
+    x += signatures_width + spacing;
+    MoveWindow(native(g_flags), x, row_a, flags_width, row, TRUE);
+    x += flags_width + spacing;
+    MoveWindow(native(g_databases), x, row_a, databases_width, row, TRUE);
+    x += databases_width + spacing;
+    MoveWindow(native(g_includeTags), x, row_a, tags_width, row, TRUE);
+    x += tags_width + spacing;
+    MoveWindow(native(g_excludeTags), x, row_a, tags_width, row, TRUE);
+    /* Directory, Log | the report (">") and the scan time beside Scan. */
+    MoveWindow(native(g_directoryButton), margin, row_b, directory_width, row, TRUE);
+    MoveWindow(native(g_logButton), margin + directory_width + spacing, row_b, log_width, row, TRUE);
+    x = width - margin - scan_width - gap - elapsed_width;
+    MoveWindow(native(g_msec), x, row_b, elapsed_width, row, TRUE);
+    MoveWindow(native(g_reportButton), x - spacing - report_width, row_b, report_width, row, TRUE);
+    MoveWindow(native(g_status), margin, status_y, width - 2 * margin, status_height, TRUE);
+    x = margin;
+    MoveWindow(native(g_options), x, tools_y, settings_width[0], row, TRUE);
+    x += settings_width[0] + spacing;
+    MoveWindow(native(g_importsButton), x, tools_y, settings_width[1], row, TRUE);
+    x += settings_width[1] + spacing;
+    MoveWindow(native(g_exportsButton), x, tools_y, settings_width[2], row, TRUE);
+    x += settings_width[2] + spacing;
+    MoveWindow(native(g_resourcesButton), x, tools_y, settings_width[3], row, TRUE);
+    x += settings_width[3] + spacing;
+    MoveWindow(native(g_symbolsButton), x, tools_y, settings_width[4], row, TRUE);
+    x = margin;
+    for (i = 0; tools[i]; ++i) {
+        MoveWindow(native(tools[i]), x, tools2_y, tool_width[i], row, TRUE);
+        x += tool_width[i] + spacing;
+    }
+    MoveWindow(native(g_exit), width - margin - exit_width, tools2_y, exit_width, row, TRUE);
 }
 
 static LRESULT CALLBACK path_subclass(HWND handle, UINT message, WPARAM wp, LPARAM lp,
@@ -958,7 +962,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
     } else if (event->type == XXWIDGETS_EVENT_RESIZE && event->widget == g_window) layout();
     else if (event->type == XXWIDGETS_EVENT_DROP_FILES && event->widget == g_window && event->path_count) {
         if (xxwidgets_widget_set_text(g_path, event->paths[0]) == XXWIDGETS_OK) g_pending = ACTION_SCAN;
-    } else if (gui_tree_mark_event(g_panel, event)) {
+    } else if (gui_tree_event(g_panel, event)) {
         /* S or ? on a result row: shown after polling returns. */
     } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == g_scan) g_pending = ACTION_SCAN;
@@ -1012,7 +1016,6 @@ static int create_controls(void)
     if (!create_control(&g_fileLabel, XXWIDGETS_LABEL, CDIE_N_("File name"), 0) ||
         !create_control(&g_path, XXWIDGETS_EDIT, "", IDC_EDIT_PATH) ||
         !create_control(&g_browse, XXWIDGETS_BUTTON, CDIE_N_("..."), IDC_BTN_BROWSE) ||
-        !create_control(&g_msec, XXWIDGETS_LABEL, "", IDC_STATIC_MSEC) ||
         !create_control(&g_status, XXWIDGETS_LABEL, "", IDC_STATUS) ||
         !create_control(&g_options, XXWIDGETS_BUTTON, CDIE_N_("Options"), IDC_BTN_OPTIONS) ||
         !create_control(&g_aboutButton, XXWIDGETS_BUTTON, CDIE_N_("About"), IDC_BTN_ABOUT) ||
@@ -1042,7 +1045,25 @@ static int create_controls(void)
     g_databaseLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_DATABASES_LABEL);
     g_includeTagsLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_INCLUDE_TAGS_LABEL);
     g_excludeTagsLabel = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_EXCLUDE_TAGS_LABEL);
+    g_signaturesButton = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_SIGNATURES);
+    g_directoryButton = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_DIRECTORY);
+    g_logButton = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_LOG);
+    g_msec = xxwidgets_scan_panel_control(g_panel, XXWIDGETS_SCAN_PANEL_ELAPSED);
+    {
+        static const xxwidgets_scan_panel_control_id facts[4][2] = {
+            {XXWIDGETS_SCAN_PANEL_ENDIANNESS_LABEL, XXWIDGETS_SCAN_PANEL_ENDIANNESS}, {XXWIDGETS_SCAN_PANEL_MODE_LABEL, XXWIDGETS_SCAN_PANEL_MODE},
+            {XXWIDGETS_SCAN_PANEL_ARCHITECTURE_LABEL, XXWIDGETS_SCAN_PANEL_ARCHITECTURE}, {XXWIDGETS_SCAN_PANEL_TYPE_LABEL, XXWIDGETS_SCAN_PANEL_TYPE}};
+        for (int i = 0; i < 4; ++i) {
+            g_factLabels[i] = xxwidgets_scan_panel_control(g_panel, facts[i][0]);
+            g_facts[i] = xxwidgets_scan_panel_control(g_panel, facts[i][1]);
+            if (!g_factLabels[i] || !g_facts[i]) return 0;
+            /* Boxed and centered, as DIE's read-only fields. */
+            SetWindowLongPtrW(native(g_facts[i]), GWL_STYLE, (GetWindowLongPtrW(native(g_facts[i]), GWL_STYLE) &
+                ~(LONG_PTR)SS_TYPEMASK) | SS_CENTER | SS_CENTERIMAGE | WS_BORDER);
+        }
+    }
     if (!g_type || !g_typeLabel || !g_flags || !g_databases || !g_scan || !g_reportButton || !g_results ||
+        !g_signaturesButton || !g_directoryButton || !g_logButton || !g_msec ||
         !g_flagLabel || !g_databaseLabel || !g_includeTags || !g_excludeTags ||
         !g_includeTagsLabel || !g_excludeTagsLabel || sync_panel_options() != XXWIDGETS_OK) return 0;
     SetWindowLongPtrW(native(g_type), GWLP_ID, IDC_COMBO_TYPE);
@@ -1056,8 +1077,9 @@ static int create_controls(void)
     xxwidgets_widget_set_text(g_databaseLabel, CDIE_TR("Databases (Main always)"));
     if (!SetWindowSubclass(native(g_path), path_subclass, 1, 0) ||
         !SetWindowSubclass(native(g_window), window_subclass, 1, 0)) return 0;
+    SetWindowLongPtrW(native(g_msec), GWLP_ID, IDC_STATIC_MSEC);
     SetWindowLongPtrW(native(g_msec), GWL_STYLE,
-        (GetWindowLongPtrW(native(g_msec), GWL_STYLE) & ~(LONG_PTR)SS_TYPEMASK) | SS_RIGHT);
+        (GetWindowLongPtrW(native(g_msec), GWL_STYLE) & ~(LONG_PTR)SS_TYPEMASK) | SS_CENTER | SS_CENTERIMAGE | WS_BORDER);
     if (xxwidgets_window_set_accept_file_drops(g_window, 1) != XXWIDGETS_OK) return 0;
     return xxwidgets_window_set_shortcuts(g_window, shortcuts, sizeof(shortcuts) / sizeof(shortcuts[0])) == XXWIDGETS_OK;
 }
@@ -1157,19 +1179,25 @@ static BOOL CALLBACK smoke_hash_rows(HWND child, LPARAM data)
     return TRUE;
 }
 
+/* The Strings table: one selected row under #, Offset, Address, Region,
+ * Size, Type and String, with a filter under every title. */
 static BOOL CALLBACK smoke_strings_rows(HWND child, LPARAM data)
 {
-    HWND *rows = (HWND *)data;
+    static const WCHAR *const expected[] = {L"0", L"00000000", L"00401000", L".rdata", L"00000012", L"ASCII", L"CDIE Strings smoke"};
+    HWND *rows = (HWND *)data, header;
     WCHAR class_name[32], text[256];
-    LRESULT length;
+    int column;
     GetClassNameW(child, class_name, 32);
-    if (lstrcmpiW(class_name, L"LISTBOX") ||
-        SendMessageW(child, LB_GETCOUNT, 0, 0) != 1 ||
-        SendMessageW(child, LB_GETCURSEL, 0, 0) != 0) return TRUE;
-    length = SendMessageW(child, LB_GETTEXTLEN, 0, 0);
-    if (length <= 0 || length >= (LRESULT)(sizeof(text) / sizeof(text[0]))) return TRUE;
-    if (SendMessageW(child, LB_GETTEXT, 0, (LPARAM)text) != length) return TRUE;
-    if (wcsstr(text, L"ASCII") && wcsstr(text, L"CDIE Strings smoke")) *rows = child;
+    if (lstrcmpW(class_name, WC_LISTVIEWW) || ListView_GetItemCount(child) != 1 ||
+        ListView_GetNextItem(child, -1, LVNI_SELECTED) != 0) return TRUE;
+    header = ListView_GetHeader(child);
+    if (!header || !(GetWindowLongPtrW(header, GWL_STYLE) & HDS_FILTERBAR) || Header_GetItemCount(header) != 7) return TRUE;
+    for (column = 0; column < 7; ++column) {
+        text[0] = 0;
+        ListView_GetItemText(child, 0, column, text, 256);
+        if (lstrcmpW(text, expected[column])) return TRUE;
+    }
+    *rows = child;
     return TRUE;
 }
 
@@ -1482,7 +1510,7 @@ static int run_smoke(void)
 {
     xxwidgets_scan_result row = {"Compiler", "Microsoft Visual C/C++", "19.29", "Smoke test"};
     unsigned int flags, databases;
-    RECT include_label_bounds, include_bounds, exclude_label_bounds, exclude_bounds, results_bounds;
+    RECT include_bounds, exclude_bounds, results_bounds, fact_bounds, signatures_bounds, scan_bounds, directory_bounds, msec_bounds;
     WCHAR class_name[32];
     SIZE_T report_length = 0;
     xxwidgets_status status;
@@ -1491,14 +1519,23 @@ static int run_smoke(void)
         !GetClassNameW(native(g_databases), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
         !GetClassNameW(native(g_includeTags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX") ||
         !GetClassNameW(native(g_excludeTags), class_name, 32) || lstrcmpiW(class_name, L"COMBOBOX")) return smoke_failed(__LINE__);
-    GetWindowRect(native(g_includeTagsLabel), &include_label_bounds);
+    /* DIE's arrangement: the file's facts above the tree; Signatures, the
+     * combo boxes and the tag filters below it, Directory under them, and a
+     * tall Scan button beside both rows. The tag labels are gone. */
     GetWindowRect(native(g_includeTags), &include_bounds);
-    GetWindowRect(native(g_excludeTagsLabel), &exclude_label_bounds);
     GetWindowRect(native(g_excludeTags), &exclude_bounds);
     GetWindowRect(native(g_results), &results_bounds);
-    if (include_label_bounds.bottom > include_bounds.top || exclude_label_bounds.bottom > exclude_bounds.top ||
-        include_bounds.right >= exclude_bounds.left || include_bounds.bottom > results_bounds.top ||
-        exclude_bounds.bottom > results_bounds.top) return smoke_failed(__LINE__);
+    GetWindowRect(native(g_facts[0]), &fact_bounds);
+    GetWindowRect(native(g_signaturesButton), &signatures_bounds);
+    GetWindowRect(native(g_scan), &scan_bounds);
+    GetWindowRect(native(g_directoryButton), &directory_bounds);
+    GetWindowRect(native(g_msec), &msec_bounds);
+    if (fact_bounds.bottom > results_bounds.top || results_bounds.bottom > signatures_bounds.top ||
+        signatures_bounds.bottom > directory_bounds.top || include_bounds.right >= exclude_bounds.left ||
+        include_bounds.top != signatures_bounds.top || exclude_bounds.right > scan_bounds.left ||
+        msec_bounds.right > scan_bounds.left || scan_bounds.top != signatures_bounds.top ||
+        scan_bounds.bottom != directory_bounds.bottom || IsWindowVisible(native(g_includeTagsLabel)) ||
+        IsWindowVisible(native(g_flagLabel))) return smoke_failed(__LINE__);
     if (xxwidgets_widget_kind(g_results) != XXWIDGETS_TREEVIEW ||
         xxwidgets_widget_kind(g_type) != XXWIDGETS_COMBOBOX ||
         xxwidgets_widget_kind(g_flags) != XXWIDGETS_CHECKCOMBOBOX ||
@@ -1584,8 +1621,8 @@ static int run_smoke(void)
                 !(xxwidgets_treeview_node_marks(g_results, node) & 2u) || xxwidgets_treeview_node_marks(g_results, 0))
                 return smoke_failed(__LINE__);
             press.type = XXWIDGETS_EVENT_CLICK; press.widget = g_results; press.value = (int)node; press.x = 0;
-            if (!gui_tree_mark_event(g_panel, &press) || !smoke_begin(L"Signature: *", SMOKE_SIGNATURE) ||
-                gui_tree_mark_process(g_window) != NULL || !smoke_finish()) return smoke_failed(__LINE__);
+            if (!gui_tree_event(g_panel, &press) || !smoke_begin(L"Signatures", SMOKE_SIGNATURE) ||
+                gui_tree_process(g_window) != NULL || !smoke_finish()) return smoke_failed(__LINE__);
         }
     }
     if (!smoke_begin_page(L"Scan", SMOKE_SCAN_CANCEL, 1) || do_settings(GUI_OPTIONS_FONTS) != 0 || !smoke_finish() || !g_bFlagDeep ||
@@ -1694,7 +1731,7 @@ static int run_smoke(void)
     do_hash();
     if (!smoke_finish()) return smoke_failed(__LINE__);
     {
-        xxwidgets_string_record record = {0, 18, 18, "ASCII", "CDIE Strings smoke"};
+        xxwidgets_string_record record = {0, 18, 18, "ASCII", "CDIE Strings smoke", ".rdata", 0x401000, 1};
         if (!smoke_begin(L"Strings", 10)) return smoke_failed(__LINE__);
         status = xxwidgets_strings_dialog(g_window, CDIE_TR("Strings"), "synthetic fixture", 18, &record, 1, NULL, NULL);
         if (status != XXWIDGETS_OK || !smoke_finish()) return smoke_failed(__LINE__);
@@ -1885,7 +1922,7 @@ int gui_run(void)
         if (status != XXWIDGETS_OK) { result = 1; break; }
         if (!g_running) break;
         {
-            const char *message = gui_tree_mark_process(g_window);
+            const char *message = gui_tree_process(g_window);
             if (message) xxwidgets_widget_set_text(g_status, message);
         }
         action = g_pending; g_pending = ACTION_NONE;

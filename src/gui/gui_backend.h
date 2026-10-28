@@ -184,8 +184,25 @@ typedef struct gui_backend_detection {
  * and is borrowed for the call. */
 typedef int (*gui_backend_tree_fn)(size_t parent, const char *text, const char *category,
                                    const gui_backend_detection *detection, void *user);
+/* What DIE shows around the result tree: the format parser's view of the
+ * scanned file (empty strings when it has none) and the engine's errors and
+ * warnings, one per line ("" when there are none; free with gui_backend_free). */
+typedef struct gui_backend_scan_info {
+    char endianness[16], mode[16], architecture[32], type[48];
+    char *log;
+} gui_backend_scan_info;
+/* info may be NULL. */
 int gui_backend_scan_tree(const char *path, int type_id, gui_backend_tree_fn callback,
-    void *user, char **report, char **type_name, xx_pd_struct *progress);
+    void *user, char **report, char **type_name, gui_backend_scan_info *info, xx_pd_struct *progress);
+/* Detections of one file for a directory scan, with these flags and optional
+ * databases (xxwidgets scan option bits) instead of the current ones. Safe on
+ * a worker thread while nothing changes the databases. */
+typedef void (*gui_backend_detection_fn)(const char *type, const char *name, const char *version, const char *info, void *user);
+int gui_backend_scan_detections(const char *path, unsigned int flags, unsigned int databases,
+    gui_backend_detection_fn callback, void *user);
+/* Loaded signatures, in database order, as "Folder/name.sg" for display and
+ * by the database path a result row names. */
+int gui_backend_signature_entry(int index, const char **display, const char **path);
 
 /* Source of the loaded signature a result row names (its database path),
  * NULL when no loaded signature has that path or it is compiled bytecode.

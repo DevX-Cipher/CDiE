@@ -108,7 +108,8 @@ static void layout(void)
     int width = bounds.width, height = bounds.height;
     xxwidgets_widget_set_rect(g_path, (xxwidgets_rect){2, 1, width - 17, 2});
     xxwidgets_widget_set_rect(g_browse, (xxwidgets_rect){width - 13, 1, 11, 2});
-    xxwidgets_scan_panel_set_rect(g_panel, (xxwidgets_rect){2, 4, width - 4, height - 13});
+    /* At least the panel's minimum height (14) in a short window. */
+    xxwidgets_scan_panel_set_rect(g_panel, (xxwidgets_rect){2, 4, width - 4, height - 13 < 14 ? 14 : height - 13});
     xxwidgets_widget_set_rect(g_options, (xxwidgets_rect){2, height - 8, 16, 2});
     xxwidgets_widget_set_rect(g_imports, (xxwidgets_rect){60, height - 8, 18, 2});
     xxwidgets_widget_set_rect(g_exports, (xxwidgets_rect){80, height - 8, 18, 2});
@@ -139,7 +140,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         xxwidgets_status status = apply_panel_tag_filters();
         if (status != XXWIDGETS_OK) report_ui_error("Read tag filters", status);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(XXWIDGETS_SCAN_PANEL_FILE_TYPE)) g_pending = ACTION_SCAN;
-    else if (gui_tree_mark_event(g_panel, event)) {
+    else if (gui_tree_event(g_panel, event)) {
         /* S or ? on a result row: shown after polling returns. */
     } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == g_browse) g_pending = ACTION_OPEN;
@@ -725,7 +726,7 @@ static int smoke_test(NSString *path)
     }
     {
         xxwidgets_strings *view = NULL;
-        xxwidgets_string_record record = {0, 18, 18, "ASCII", "CDIE Strings smoke"};
+        xxwidgets_string_record record = {0, 18, 18, "ASCII", "CDIE Strings smoke", NULL, 0, 0};
         int ok = xxwidgets_strings_create(g_window, (xxwidgets_rect){1, 1, 100, 20}, &view) == XXWIDGETS_OK;
         if (ok) ok = xxwidgets_strings_set_records(view, &record, 1) == XXWIDGETS_OK && xxwidgets_strings_count(view) == 1;
         if (view && xxwidgets_strings_destroy(view) != XXWIDGETS_OK) ok = 0;
@@ -886,7 +887,7 @@ int main(int argc, char **argv)
                 if (status != XXWIDGETS_OK) { result = 1; break; }
                 if (!g_running) break;
                 if (g_layout) { g_layout = 0; layout(); }
-                const char *message = gui_tree_mark_process(g_window);
+                const char *message = gui_tree_process(g_window);
                 if (message) xxwidgets_widget_set_text(g_status, message);
                 int action = g_pending; g_pending = ACTION_NONE;
                 switch (action) {

@@ -6,25 +6,47 @@
 #include <xxfclib/threads/xx_threads.h>
 #include <stdlib.h>
 
-static xxwidgets_string_record *records(const cdie_strings_data *data)
+/* The smallest file region holding offset: a section rather than the segment
+ * around it. NULL without a map or outside every region. */
+static const xx_memory_record *region_of(const cdie_memory_map_data *map, uint64_t offset)
+{
+    const xx_memory_record *best = NULL;
+    size_t i;
+    for (i = 0; map && i < map->count; ++i) {
+        const xx_memory_record *r = map->records + i;
+        if (r->is_virtual || r->offset < 0 || r->size <= 0 || !r->name[0] || offset < (uint64_t)r->offset ||
+            offset - (uint64_t)r->offset >= (uint64_t)r->size) continue;
+        if (!best || r->size < best->size) best = r;
+    }
+    return best;
+}
+static xxwidgets_string_record *records(const cdie_strings_data *data, const cdie_memory_map_data *map)
 {
     size_t i;
     xxwidgets_string_record *rows;
     if (data->count > CDIE_STRINGS_MAX_RECORDS) return NULL;
-    rows = malloc((data->count ? data->count : 1) * sizeof(*rows));
+    rows = calloc(data->count ? data->count : 1, sizeof(*rows));
     if (!rows) return NULL;
     for (i = 0; i < data->count; ++i) {
         const cdie_string_record *r = data->records + i;
-        rows[i] = (xxwidgets_string_record){r->offset, r->byte_size, r->character_length, cdie_strings_encoding_name(r->encoding), r->text};
+        const xx_memory_record *region = region_of(map, r->offset);
+        rows[i] = (xxwidgets_string_record){r->offset, r->byte_size, r->character_length, cdie_strings_encoding_name(r->encoding), r->text, NULL, 0, 0};
+        if (region) {
+            rows[i].region = region->name;
+            if (region->address != XX_INVALID_ADDRESS) {
+                rows[i].address = region->address + (r->offset - (uint64_t)region->offset);
+                rows[i].has_address = 1;
+            }
+        }
     }
     return rows;
 }
-xxwidgets_status gui_strings_set_data(xxwidgets_strings *view, const cdie_strings_data *data)
+xxwidgets_status gui_strings_set_data(xxwidgets_strings *view, const cdie_strings_data *data, const cdie_memory_map_data *map)
 {
     xxwidgets_string_record *rows;
     xxwidgets_status status;
     if (!view || !data) return XXWIDGETS_INVALID_ARGUMENT;
-    rows = records(data);
+    rows = records(data, map);
     if (!rows) return XXWIDGETS_OUT_OF_MEMORY;
     status = xxwidgets_strings_set_records(view, rows, data->count); free(rows); return status;
 }
@@ -46,9 +68,10 @@ xxwidgets_status gui_strings_save_csv(const char *path, const char *text, size_t
     if (xx_io_close(device) != 0) ok = 0;
     return ok ? XXWIDGETS_OK : XXWIDGETS_PLATFORM_ERROR;
 }
-static xxwidgets_status show_strings(xxwidgets_widget *owner, const char *path, const cdie_strings_data *data)
+static xxwidgets_status show_strings(xxwidgets_widget *owner, const char *path, const cdie_strings_data *data,
+                                    const cdie_memory_map_data *map)
 {
-    xxwidgets_string_record *rows = records(data);
+    xxwidgets_string_record *rows = records(data, map);
     xxwidgets_status status;
     if (!rows) return XXWIDGETS_OUT_OF_MEMORY;
     status = xxwidgets_strings_dialog(owner, CDIE_TR("Strings"), path, data->size, rows, data->count, gui_strings_save_csv, NULL);
@@ -57,6 +80,7 @@ static xxwidgets_status show_strings(xxwidgets_widget *owner, const char *path, 
 typedef struct strings_job {
     const char *path;
     cdie_strings_data *data;
+    cdie_memory_map_data *map; /* Regions and addresses, NULL when unavailable. */
     char *error;
     xx_mutex_t *lock;
     xx_pd_struct work, snapshot;
@@ -74,6 +98,11 @@ static int strings_worker(void *user)
     strings_job *job = user;
     xx_pd_observer previous = xx_pd_set_observer(&job->work, observe_strings, job);
     job->ok = cdie_strings_read(job->path, NULL, &job->work, &job->data, &job->error);
+    if (job->ok) {
+        char *error = NULL;
+        if (!cdie_memory_map_read(job->path, &job->work, &job->map, &error)) job->map = NULL;
+        xx_rt_free(error);
+    }
     xx_pd_set_observer(previous.progress, previous.callback, previous.user_data);
     xx_mutex_lock(job->lock); job->snapshot = job->work; job->done = 1; xx_mutex_unlock(job->lock);
     return 0;
@@ -106,9 +135,9 @@ xxwidgets_status gui_strings_show(xxwidgets_widget *owner, const char *path)
     joined = xx_thread_join(thread, NULL); xx_mutex_destroy(job.lock);
     if (!joined) status = XXWIDGETS_PLATFORM_ERROR;
     else if (status == XXWIDGETS_OK && job.ok)
-        status = show_strings(owner, path, job.data);
+        status = show_strings(owner, path, job.data, job.map);
     else if (status == XXWIDGETS_OK && !job.work.is_stop)
         status = xxwidgets_text_dialog(owner, CDIE_TR("Strings"), job.error ? job.error : "Cannot extract strings");
-    cdie_strings_free(job.data); xx_rt_free(job.error);
+    cdie_strings_free(job.data); xx_rt_free(job.map); xx_rt_free(job.error);
     return status;
 }

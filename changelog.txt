@@ -4,6 +4,12 @@
 
     Initial release.
 
+    * Every table in the GUI and TUI has a filter under each column title
+      (Imports, Exports, Resources, Symbols, Memory Map, Strings, ...). Strings
+      is now a #/Offset/Address/Region/Size/Type/String table: each string
+      shows the Memory Map region holding it and its address there. Added the
+      xxwidgets XXWIDGETS_TABLE text table, with core, Win32 and TUI tests.
+
     * Added GUI Symbols (Ctrl+Shift+Y/Cmd+Shift+Y) for native PE COFF, ELF
       and thin Mach-O symbols. Expanded xxwidgets_symbols_* around SYMBOLSVIEWER
       with filtering, metadata details, Copy row/visible and a reusable modal.

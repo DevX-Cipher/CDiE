@@ -221,15 +221,16 @@ static void layout(tui_app *ui)
     int w = bounds.width, h = bounds.height;
     (void)xxwidgets_widget_set_rect(ui->path, (xxwidgets_rect){2, 1, w - 18, 2});
     (void)xxwidgets_widget_set_rect(ui->browse, (xxwidgets_rect){w - 14, 1, 12, 2});
-    (void)xxwidgets_scan_panel_set_rect(ui->panel, (xxwidgets_rect){2, 4, w - 4, h - 16});
-    for (int i = 0; i < 11; ++i) {
-        int row = i / 6, col = i % 6;
-        int x = 2 + col * (w - 4) / 6;
-        int end = 2 + (col + 1) * (w - 4) / 6;
-        (void)xxwidgets_widget_set_rect(ui->tools[i], (xxwidgets_rect){x, h - 11 + row * 3, end - x - 1, 2});
+    /* The panel keeps its minimum height (14) in a short window. */
+    (void)xxwidgets_scan_panel_set_rect(ui->panel, (xxwidgets_rect){2, 4, w - 4, h - 12 < 14 ? 14 : h - 12});
+    /* The tools, Options and About: two rows of seven under the panel. */
+    for (int i = 0; i < 13; ++i) {
+        xxwidgets_widget *button = i < 11 ? ui->tools[i] : i == 11 ? ui->options : ui->about;
+        int row = i / 7, col = i % 7;
+        int x = 2 + col * (w - 4) / 7;
+        int end = 2 + (col + 1) * (w - 4) / 7;
+        (void)xxwidgets_widget_set_rect(button, (xxwidgets_rect){x, h - 7 + row * 3, end - x - 1, 2});
     }
-    (void)xxwidgets_widget_set_rect(ui->options, (xxwidgets_rect){2 + 5 * (w - 4) / 6, h - 8, (w - 4) / 6 - 1, 2});
-    (void)xxwidgets_widget_set_rect(ui->about, (xxwidgets_rect){2, h - 5, 16, 2});
     (void)xxwidgets_widget_set_rect(ui->status, (xxwidgets_rect){2, h - 1, w - 4, 1});
 }
 static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *user)
@@ -247,7 +248,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         (void)xxwidgets_scan_panel_clear(ui->panel);
         (void)xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE)) ui->pending = ACTION_SCAN;
-    else if (gui_tree_mark_event(ui->panel, event)) {
+    else if (gui_tree_event(ui->panel, event)) {
         /* S or ? on a result row: shown after polling returns. */
     } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == ui->browse) ui->pending = ACTION_BROWSE;
@@ -435,7 +436,7 @@ int main(int argc, char **argv)
         status = xxwidgets_app_poll(ui.app, 30);
         if (status != XXWIDGETS_OK) { result = 1; break; }
         if (ui.needs_layout) { ui.needs_layout = 0; layout(&ui); }
-        const char *message = gui_tree_mark_process(ui.window);
+        const char *message = gui_tree_process(ui.window);
         if (message) set_status(&ui, message);
         int action = ui.pending; ui.pending = ACTION_NONE;
         if (action == ACTION_SCAN) (void)scan(&ui, 0);

@@ -199,8 +199,7 @@ static int layout(tui_app *ui)
     width = columns > 2 ? columns - 2 : 1;
     height = rows > 2 ? rows - 2 : 1;
     if (xxwidgets_widget_set_rect(ui->window, (xxwidgets_rect){0, 0, width, height}) != XXWIDGETS_OK) return 0;
-    for (int i = 0; i < XXWIDGETS_SCAN_PANEL_CONTROL_COUNT; ++i)
-        if (xxwidgets_widget_set_visible(control(ui, (xxwidgets_scan_panel_control_id)i), !small) != XXWIDGETS_OK) return 0;
+    if (xxwidgets_scan_panel_set_visible(ui->panel, !small) != XXWIDGETS_OK) return 0;
     if (xxwidgets_widget_set_visible(ui->path_label, !small) != XXWIDGETS_OK ||
         xxwidgets_widget_set_visible(ui->path, !small) != XXWIDGETS_OK ||
         xxwidgets_widget_set_visible(ui->hint, !small) != XXWIDGETS_OK ||
@@ -240,7 +239,7 @@ static void on_event(xxwidgets_app *app, const xxwidgets_event *event, void *use
         (void)xxwidgets_widget_set_enabled(control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE), 0);
     } else if (event->type == XXWIDGETS_EVENT_SELECT && event->widget == control(ui, XXWIDGETS_SCAN_PANEL_FILE_TYPE))
         ui->pending = ACTION_SCAN;
-    else if (gui_tree_mark_event(ui->panel, event)) {
+    else if (gui_tree_event(ui->panel, event)) {
         /* S or ? typed on a result row: shown after polling returns. */
     } else if (event->type == XXWIDGETS_EVENT_CLICK) {
         if (event->widget == ui->quit) ui->running = 0;
@@ -533,7 +532,7 @@ static int tui_run_options(int argc, char **argv)
         if (!ui.running) break;
         if (ui.small && !options.smoke) continue;
         {
-            const char *message = gui_tree_mark_process(ui.window);
+            const char *message = gui_tree_process(ui.window);
             if (message) set_status(&ui, message);
         }
         action = ui.pending;

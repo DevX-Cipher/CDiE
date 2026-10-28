@@ -4,6 +4,8 @@
 #include "gui_backend.h"
 #include <xxwidgets/die_engine/xxwidgets_die_signature_editor.h>
 #include <xxwidgets/xxwidgets_process.h>
+#include <xxwidgets/xxwidgets_scan_directory.h>
+#include <xxfclib/rt/xx_rt.h>
 #include <stdio.h>
 #include <xxfclib/threads/xx_threads.h>
 #include <stdlib.h>
@@ -19,15 +21,19 @@ typedef struct tree_buffer {
     size_t count, capacity, detections;
 } tree_buffer;
 
-/* The rows of the tree on screen, and what a button press waits on. */
+enum { PENDING_NONE = 0, PENDING_MARK, PENDING_SIGNATURES, PENDING_DIRECTORY, PENDING_LOG };
+
+/* The rows of the tree on screen, the last scan's file and log, and what a
+ * button press waits on. */
 static struct {
     tree_buffer rows;
-    char *path;
+    char *path, *log;
     int type_id;
     const xxwidgets_widget *tree;
+    xxwidgets_scan_panel *panel;
     size_t pending_node;
-    int pending_mark;
-} g_marks = {{0}, NULL, 0, NULL, 0, -1};
+    int pending_mark, pending;
+} g_marks = {{0}, NULL, NULL, 0, NULL, NULL, 0, -1, PENDING_NONE};
 
 static void free_rows(tree_buffer *rows)
 {
@@ -55,6 +61,7 @@ typedef struct scan_job {
     int type_id;
     tree_buffer buffer;
     char *report, *type;
+    gui_backend_scan_info info;
     int ok;
     xx_pd_struct work;
     xx_mutex_t *lock;
@@ -119,7 +126,7 @@ static int scan_worker(void *arg)
     scan_job *job = arg;
     xx_pd_observer previous = xx_pd_set_observer(&job->work, observe_progress, job);
     job->ok = gui_backend_scan_tree(job->path, job->type_id, collect_node, &job->buffer,
-                                    &job->report, &job->type, &job->work);
+                                    &job->report, &job->type, &job->info, &job->work);
     xx_pd_set_observer(previous.progress, previous.callback, previous.user_data);
     xx_mutex_lock(job->lock);
     job->snapshot = job->work;
@@ -146,6 +153,7 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
     scan_job job = {0};
     xx_pd_struct progress = xx_pd_init();
     xx_thread_t *thread;
+    long long started = xx_rt_clock_ms();
     int ok;
     if (type) *type = NULL;
     if (cancelled) *cancelled = 0;
@@ -167,6 +175,13 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
     if (ok && panel) ok = xxwidgets_scan_panel_set_tree(panel, job.buffer.nodes, job.buffer.colors,
         job.buffer.count, job.buffer.detections, job.report) == XXWIDGETS_OK;
     if (ok && panel) {
+        /* The facts and time DIE shows around the tree, and the log behind Log. */
+        (void)xxwidgets_scan_panel_set_file_info(panel, job.info.endianness, job.info.mode, job.info.architecture, job.info.type);
+        (void)xxwidgets_scan_panel_set_elapsed(panel, xx_rt_clock_ms() - started);
+        free(g_marks.log);
+        g_marks.log = copy_text(job.info.log);
+    }
+    if (ok && panel) {
         /* Labels as DIE draws them; the rows stay for the button presses. */
         static const char *const labels[MARK_COUNT] = {"S", "?"};
         xxwidgets_widget *tree = xxwidgets_scan_panel_control(panel, XXWIDGETS_SCAN_PANEL_RESULTS);
@@ -182,7 +197,7 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
     }
     if (ok && type) { *type = job.type; job.type = NULL; }
     free_rows(&job.buffer);
-    gui_backend_free(job.report); gui_backend_free(job.type);
+    gui_backend_free(job.report); gui_backend_free(job.type); gui_backend_free(job.info.log);
     return ok;
 }
 
@@ -190,40 +205,134 @@ void gui_tree_reset(void)
 {
     free_rows(&g_marks.rows);
     free(g_marks.path);
-    g_marks.path = NULL;
+    free(g_marks.log);
+    g_marks.path = g_marks.log = NULL;
     g_marks.tree = NULL;
-    g_marks.pending_mark = -1;
+    g_marks.pending = PENDING_NONE;
 }
 
-int gui_tree_mark_event(const xxwidgets_scan_panel *panel, const xxwidgets_event *event)
+int gui_tree_event(xxwidgets_scan_panel *panel, const xxwidgets_event *event)
 {
     const xxwidgets_widget *tree = panel ? xxwidgets_scan_panel_control(panel, XXWIDGETS_SCAN_PANEL_RESULTS) : NULL;
-    if (!event || event->type != XXWIDGETS_EVENT_CLICK || !tree || event->widget != tree) return 0;
+    static const struct { xxwidgets_scan_panel_control_id control; int pending; } buttons[] = {
+        {XXWIDGETS_SCAN_PANEL_SIGNATURES, PENDING_SIGNATURES}, {XXWIDGETS_SCAN_PANEL_DIRECTORY, PENDING_DIRECTORY},
+        {XXWIDGETS_SCAN_PANEL_LOG, PENDING_LOG}};
+    size_t i;
+    if (!event || event->type != XXWIDGETS_EVENT_CLICK || !tree) return 0;
+    for (i = 0; i < sizeof(buttons) / sizeof(buttons[0]); ++i)
+        if (event->widget == xxwidgets_scan_panel_control(panel, buttons[i].control)) {
+            g_marks.panel = panel;
+            g_marks.pending = buttons[i].pending;
+            return 1;
+        }
+    if (event->widget != tree) return 0;
     /* Only presses on the rows this module put there, in this tree. */
     if (tree == g_marks.tree && event->value >= 0 && (size_t)event->value < g_marks.rows.count &&
         event->x >= 0 && event->x < MARK_COUNT && (g_marks.rows.marks[event->value] >> event->x & 1u)) {
         g_marks.pending_node = (size_t)event->value;
         g_marks.pending_mark = event->x;
+        g_marks.pending = PENDING_MARK;
     }
     return 1;
 }
 
 typedef struct run_target {
-    const char *path, *signature;
+    const char *path;
     int type_id;
 } run_target;
 
-/* The signature editor's Run: its result text belongs to the editor's heap. */
+/* The signature editor's Run, for the signature at path: its result text
+ * belongs to the editor's heap. */
 static xxwidgets_status run_edited(const char *source, const char *path, char **result, void *user)
 {
     const run_target *target = user;
     char *text = NULL;
-    int ok;
-    (void)path;
-    ok = gui_backend_run_signature(target->path, target->type_id, target->signature, source, &text);
-    *result = copy_text(text && text[0] ? text : ok ? CDIE_TR("Nothing detected.") : CDIE_TR("Cannot scan the file."));
+    int ok = 0;
+    if (target->path) ok = gui_backend_run_signature(target->path, target->type_id, path, source, &text);
+    *result = copy_text(!target->path ? CDIE_TR("Scan a file first: Run executes the signature on it.") :
+        text && text[0] ? text : ok ? CDIE_TR("Nothing detected.") : CDIE_TR("Cannot scan the file."));
     gui_backend_free(text);
     return *result ? XXWIDGETS_OK : XXWIDGETS_OUT_OF_MEMORY;
+}
+
+/* Entry index of the Signatures window: its source, or a note where a
+ * compiled database has none. */
+static xxwidgets_status load_signature(size_t index, char **source, const char **path, void *user)
+{
+    char *text;
+    (void)user;
+    if (!gui_backend_signature_entry((int)index, NULL, path)) return XXWIDGETS_INVALID_ARGUMENT;
+    text = gui_backend_signature_source(*path);
+    *source = copy_text(text ? text : CDIE_TR("// The source of this signature is not available: its database is compiled.\n"));
+    gui_backend_free(text);
+    return *source ? XXWIDGETS_OK : XXWIDGETS_OUT_OF_MEMORY;
+}
+
+/* Every loaded signature, signature (a database path) or the first shown. */
+static xxwidgets_status signatures_window(xxwidgets_widget *owner, const char *signature)
+{
+    int count = gui_backend_signature_count(), i;
+    size_t selected = 0;
+    const char **names;
+    run_target target = {g_marks.path, g_marks.type_id};
+    xxwidgets_status status;
+    if (count <= 0) return XXWIDGETS_UNAVAILABLE;
+    names = malloc((size_t)count * sizeof(*names));
+    if (!names) return XXWIDGETS_OUT_OF_MEMORY;
+    for (i = 0; i < count; ++i) {
+        const char *path = NULL;
+        if (!gui_backend_signature_entry(i, &names[i], &path)) { free(names); return XXWIDGETS_PLATFORM_ERROR; }
+        if (signature && path && !strcmp(path, signature)) selected = (size_t)i;
+    }
+    status = xxwidgets_die_signatures_dialog(owner, CDIE_TR("Signatures"), names, (size_t)count, selected,
+        load_signature, run_edited, &target);
+    free(names);
+    return status;
+}
+
+typedef struct directory_out {
+    xxwidgets_scan_directory_task *task;
+    xxwidgets_status status;
+} directory_out;
+
+static void emit_detection(const char *type, const char *name, const char *version, const char *info, void *user)
+{
+    directory_out *out = user;
+    xxwidgets_scan_result detection = {type, name, version, info};
+    if (out->status == XXWIDGETS_OK) out->status = xxwidgets_scan_directory_emit(out->task, &detection);
+}
+
+/* One file of a directory scan, on the dialog's worker thread. */
+static xxwidgets_status scan_directory_file(xxwidgets_scan_directory_task *task, const char *path, const xxwidgets_scan_options *options, void *user)
+{
+    directory_out out = {task, XXWIDGETS_OK};
+    (void)user;
+    if (xxwidgets_scan_directory_cancelled(task)) return XXWIDGETS_OK;
+    if (!gui_backend_scan_detections(path, options->flags, options->databases, emit_detection, &out) && out.status == XXWIDGETS_OK)
+        return XXWIDGETS_PLATFORM_ERROR;
+    return out.status;
+}
+
+static xxwidgets_status directory_window(xxwidgets_widget *owner)
+{
+    xxwidgets_scan_options options = {XXWIDGETS_SCAN_DEEP | XXWIDGETS_SCAN_HEURISTIC | XXWIDGETS_SCAN_VERBOSE,
+        XXWIDGETS_SCAN_DATABASE_EXTRA | XXWIDGETS_SCAN_DATABASE_CUSTOM};
+    char *folder = copy_text(g_marks.path ? g_marks.path : "");
+    xxwidgets_status status;
+    if (!folder) return XXWIDGETS_OUT_OF_MEMORY;
+    if (g_marks.panel) {
+        (void)xxwidgets_scan_panel_get_flags(g_marks.panel, &options.flags);
+        (void)xxwidgets_scan_panel_get_databases(g_marks.panel, &options.databases);
+    }
+    {
+        /* Start in the folder of the scanned file, if there is one. */
+        char *cut = NULL;
+        for (char *s = folder; *s; ++s) if (*s == '/' || *s == '\\') cut = s;
+        if (cut) *cut = 0; else folder[0] = 0;
+    }
+    status = xxwidgets_scan_directory_dialog(owner, CDIE_TR("Scan directory"), folder, &options, scan_directory_file, NULL);
+    free(folder);
+    return status;
 }
 
 /* "Name" for the search, percent-encoded as a query value. */
@@ -242,30 +351,24 @@ static char *search_url(const char *name)
     return url;
 }
 
-const char *gui_tree_mark_process(xxwidgets_widget *owner)
+const char *gui_tree_process(xxwidgets_widget *owner)
 {
     static char message[512];
     size_t node = g_marks.pending_node;
-    int mark = g_marks.pending_mark;
+    int mark = g_marks.pending_mark, pending = g_marks.pending;
     xxwidgets_status status;
-    g_marks.pending_mark = -1;
-    if (mark < 0 || node >= g_marks.rows.count) return NULL;
+    g_marks.pending = PENDING_NONE;
+    if (pending == PENDING_SIGNATURES || pending == PENDING_DIRECTORY || pending == PENDING_LOG) {
+        if (pending == PENDING_SIGNATURES) status = signatures_window(owner, NULL);
+        else if (pending == PENDING_DIRECTORY) status = directory_window(owner);
+        else status = xxwidgets_text_dialog(owner, CDIE_TR("Log"), g_marks.log && g_marks.log[0] ? g_marks.log : CDIE_TR("No messages."));
+        if (status == XXWIDGETS_UNAVAILABLE && pending == PENDING_SIGNATURES) return CDIE_TR("No signatures loaded.");
+        return status == XXWIDGETS_OK ? NULL : xxwidgets_status_string(status);
+    }
+    if (pending != PENDING_MARK || mark < 0 || node >= g_marks.rows.count) return NULL;
     if (mark == MARK_SIGNATURE) {
-        const char *signature = g_marks.rows.signatures[node];
-        char *source = gui_backend_signature_source(signature), *title;
-        run_target target = {g_marks.path, signature, g_marks.type_id};
-        const char *base = signature, *s;
-        if (!source) {
-            cdie_translation_snprintf(message, sizeof(message), CDIE_N_("The source of %s is not available: it is compiled or no longer loaded."), signature);
-            return message;
-        }
-        for (s = signature; *s; ++s) if (*s == '/' || *s == '\\') base = s + 1;
-        title = malloc(strlen(CDIE_TR("Signature")) + strlen(base) + 3);
-        if (!title) { gui_backend_free(source); return xxwidgets_status_string(XXWIDGETS_OUT_OF_MEMORY); }
-        sprintf(title, "%s: %s", CDIE_TR("Signature"), base);
-        status = xxwidgets_die_signature_editor_dialog(owner, title, source, signature, run_edited, &target);
-        free(title);
-        gui_backend_free(source);
+        /* As DIE: the Signatures window, on the script that found the row. */
+        status = signatures_window(owner, g_marks.rows.signatures[node]);
         return status == XXWIDGETS_OK ? NULL : xxwidgets_status_string(status);
     }
     {
