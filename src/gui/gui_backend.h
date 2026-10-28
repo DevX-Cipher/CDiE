@@ -31,6 +31,7 @@
 #define CDIE_GUI_BACKEND_H
 
 #include <stddef.h>
+#include <stdint.h>
 #include <xxfclib/data/xx_pd.h>
 
 #ifdef __cplusplus
@@ -102,6 +103,29 @@ enum {
  * Invalid bits leave the current settings unchanged. Call between scans. */
 unsigned int gui_backend_get_scan_modes(void);
 int gui_backend_set_scan_modes(unsigned int modes);
+
+/* Only compiled scanner implementations are accepted. Automatic currently
+ * resolves to Detect It Easy; PEiD and YARA are not built into this frontend. */
+typedef struct gui_backend_scan_preferences {
+    int recursive, profiling, sort, use_cache;
+    char engine[16]; /* "auto" or "die" */
+} gui_backend_scan_preferences;
+size_t gui_backend_engine_count(void);
+const char *gui_backend_engine_id(size_t index);
+const char *gui_backend_engine_name(size_t index);
+int gui_backend_get_scan_preferences(gui_backend_scan_preferences *preferences);
+int gui_backend_set_scan_preferences(const gui_backend_scan_preferences *preferences);
+/* Validate and stage all database folders before changing either databases or
+ * preferences. Empty folders select executable-local defaults. Failure leaves
+ * the complete previous configuration intact. Call between scans. */
+int gui_backend_apply_configuration(const gui_backend_scan_preferences *preferences,
+    const char *main_path, const char *extra_path, const char *custom_path,
+    char *error, size_t error_capacity);
+/* The optional one-entry result cache verifies the complete input with a
+ * bounded BLAKE2sp digest, path, type selector, options and database generation.
+ * It never caches failures/cancellation. Counters are useful for diagnostics. */
+void gui_backend_clear_cache(void);
+void gui_backend_cache_statistics(uint64_t *hits, uint64_t *misses);
 
 typedef struct gui_backend_optimization_options {
     size_t buffer_size;
@@ -218,6 +242,9 @@ int gui_backend_run_signature(const char *path, int type_id, const char *signatu
  * the databases), as plain text; NULL when there is none. Free with
  * gui_backend_free. */
 char *gui_backend_info_text(const char *name);
+/* Directory containing html/<name>.html (or <name>.html). "$data" resolves
+ * beside the executable. NULL/empty restores the bundled lookup locations. */
+int gui_backend_set_info_path(const char *path);
 
 /* Frees a string handed back by gui_backend_scan (uses the engine allocator,
  * which on the CRT-free build is not the Win32 heap the frontend uses). */

@@ -17,7 +17,14 @@ struct cdie_disasm_context {
     const xx_memory_map *map;
     cdie_disasm_info info;
     cdie_disasm_page *page;
+    int syntax;
 };
+int cdie_disasm_set_syntax(cdie_disasm_context *context, int syntax)
+{
+    if (!context || (syntax != 0 && syntax != 1)) return 0;
+    context->syntax = syntax;
+    return 1;
+}
 static const char *const modes[] = {"Auto (file)", "x86 16-bit", "x86 32-bit", "x86 64-bit", "ARM32 LE",
                                     "Thumb LE",    "ARM64 LE",   "ARM32 BE",   "Thumb BE",   "ARM64 BE"};
 size_t cdie_disasm_mode_count(void)
@@ -132,7 +139,7 @@ int cdie_disasm_open(const char *path, xx_pd_struct *pd, cdie_disasm_context **o
     *out = c;
     return 1;
 }
-static unsigned decode_one(size_t mode, const unsigned char *bytes, size_t size, uint64_t address, char *text, size_t capacity)
+static unsigned decode_one(int syntax, size_t mode, const unsigned char *bytes, size_t size, uint64_t address, char *text, size_t capacity)
 {
     uint32_t length = 0;
     size_t formatted = 0;
@@ -146,7 +153,7 @@ static unsigned decode_one(size_t mode, const unsigned char *bytes, size_t size,
             return 0;
         length = cdisasm_x86_decode(CDISASM_CPU_X86, bits, bytes, size, address, &flags, &instruction);
         if (length)
-            formatted = cdisasm_x86_format_mode(&instruction, bits, CDISASM_FORMAT_SYNTAX_X86_INTEL, text, capacity);
+            formatted = cdisasm_x86_format_mode(&instruction, bits, syntax ? CDISASM_FORMAT_SYNTAX_X86_ATT : CDISASM_FORMAT_SYNTAX_X86_INTEL, text, capacity);
     }
 #if USE_ARCH_ARM
     else if (mode >= CDIE_DISASM_ARM && mode <= CDIE_DISASM_ARM64_BE) {
@@ -207,7 +214,7 @@ cdie_disasm_status cdie_disasm_load(cdie_disasm_context *c, uint64_t offset, siz
                     r->offset - (uint64_t)m->offset < (uint64_t)m->size && (uint64_t)m->size - (r->offset - (uint64_t)m->offset) < span)
                     span = (size_t)((uint64_t)m->size - (r->offset - (uint64_t)m->offset));
             }
-        r->size = decode_one(mode, bytes + pos, span, r->address, r->instruction, sizeof(r->instruction));
+        r->size = decode_one(c->syntax, mode, bytes + pos, span, r->address, r->instruction, sizeof(r->instruction));
         if (!r->size) {
             r->size = 1;
             xx_rt_snprintf(r->instruction, sizeof(r->instruction), "db 0x%02X", bytes[pos]);

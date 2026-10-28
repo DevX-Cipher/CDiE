@@ -80,7 +80,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake unzip
+          sudo apt-get install -y build-essential cmake unzip pkg-config libgtk-3-dev
       - name: Configure
         working-directory: cdie
         run: |
@@ -100,8 +100,15 @@ jobs:
             -D "CPACK_PACKAGE_FILE_NAME=cdie_ubuntu24_amd64_${version}"
           archive="release/cdie_ubuntu24_amd64_${version}.zip"
           test -s "$archive"
-          unzip -Z -1 "$archive" | grep -Eq '(^|/)bin/cdie$'
-          unzip -Z -1 "$archive" | grep -Eq '(^|/)bin/db/.+[^/]$'
+          inventory=$(mktemp)
+          unzip -Z -1 "$archive" > "$inventory"
+          grep -Eq '(^|/)bin/diec$' "$inventory"
+          grep -Eq '(^|/)bin/die$' "$inventory"
+          grep -Eq '(^|/)bin/db/.+[^/]$' "$inventory"
+          if grep -Eq '(^|/)(cdie_tui|cdie_gui|cdie)$' "$inventory"; then
+            echo 'Unexpected legacy frontend in Ubuntu package' >&2
+            exit 1
+          fi
       - name: Save Ubuntu package
         uses: actions/upload-artifact@v4
         with:
@@ -173,15 +180,16 @@ jobs:
           extract_dir=$(mktemp -d)
           unzip -q "$archive" -d "$extract_dir"
           package_dir="$extract_dir/cdie_mac_arm64_portable_${version}"
-          test -x "$package_dir/cdie"
-          test -x "$package_dir/cdie_gui.app/Contents/MacOS/cdie_gui"
-          plutil -lint "$package_dir/cdie_gui.app/Contents/Info.plist"
-          test -n "$(find "$package_dir/cdie_gui.app/Contents/Resources/db" -type f -print -quit)"
-          test -n "$(find "$package_dir/db" -type f -print -quit)"
+          test -x "$package_dir/die.app/Contents/MacOS/die"
+          plutil -lint "$package_dir/die.app/Contents/Info.plist"
+          test -n "$(find "$package_dir/die.app/Contents/Resources/db" -type f -print -quit)"
+          for excluded in diec diex cdie cdie_tui cdie_gui.app; do
+            test ! -e "$package_dir/$excluded"
+          done
 
           smoke_dir=$(mktemp -d)
           cd "$smoke_dir"
-          "$package_dir/cdie" /usr/bin/file > scan.txt
+          "$package_dir/die.app/Contents/MacOS/die" --smoke-test /usr/bin/file > scan.txt
           test -s scan.txt
       - name: Save macOS package
         uses: actions/upload-artifact@v4
@@ -246,8 +254,18 @@ jobs:
           $archive = [System.IO.Compression.ZipFile]::OpenRead($packages[0].FullName)
           try {
             $entries = @($archive.Entries | ForEach-Object { $_.FullName })
-            if (-not ($entries | Where-Object { $_ -match '(^|/)cdie\.exe$' })) {
-              throw 'Windows package is missing cdie.exe'
+            foreach ($application in @('die.exe', 'diec.exe')) {
+              $escapedName = [regex]::Escape($application)
+              if (-not ($entries | Where-Object { $_ -match "(^|/)$escapedName`$" })) {
+                throw "Windows package is missing $application"
+              }
+            }
+            if ($entries | Where-Object { $_ -match '(^|/)(cdie_gui|cdie|cdie_tui|diex)\.exe$' }) {
+              throw 'Windows package contains a legacy frontend'
+            }
+            $portable = @($archive.Entries | Where-Object { $_.FullName -match '(^|/)PORTABLE$' })
+            if ($portable.Count -ne 1 -or $portable[0].Length -ne 0) {
+              throw 'Windows package requires one empty PORTABLE marker'
             }
             if (-not ($entries | Where-Object { $_ -match '(^|/)db/.+[^/]$' })) {
               throw 'Windows package is missing the signature database'

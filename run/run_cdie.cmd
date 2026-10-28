@@ -14,10 +14,10 @@ if "%CDIE_DB_ROOT%"=="" (
         set "CDIE_DB_ROOT=%~dp0..\..\_mylibs\Detect-It-Easy"
     )
 )
-set CDIE_EXE=%~dp0..\..\cdie_build\src\console\cdie.exe
+set CDIE_EXE=%~dp0..\..\cdie_build\src\console\diec.exe
 
 if not exist "%CDIE_EXE%" (
-    echo cdie.exe not found at "%CDIE_EXE%".
+    echo diec.exe not found at "%CDIE_EXE%".
     echo Build it first:  cmake -S . -B ..\cdie_build ^&^& cmake --build ..\cdie_build
     exit /b 1
 )

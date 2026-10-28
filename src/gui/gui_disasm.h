@@ -11,5 +11,7 @@ typedef struct gui_disasm_source {
 } gui_disasm_source;
 /* Borrows path/context. The source/adapter must outlive the browser. */
 void gui_disasm_source_init(gui_disasm_source *adapter, cdie_disasm_context *context, const char *path);
+void gui_disasm_set_options(const xxwidgets_disasm_options *options);
+void gui_disasm_get_options(xxwidgets_disasm_options *options);
 xxwidgets_status gui_disasm_show(xxwidgets_widget *owner, const char *path);
 #endif

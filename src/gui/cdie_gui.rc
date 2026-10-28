@@ -27,9 +27,9 @@ BEGIN
             VALUE "CompanyName", "NTInfo"
             VALUE "FileDescription", "Detect It Easy console engine (C port) - GUI"
             VALUE "FileVersion", "4.0.0.0"
-            VALUE "InternalName", "cdie_gui"
+            VALUE "InternalName", "die"
             VALUE "LegalCopyright", "Copyright (C) 2026 hors"
-            VALUE "OriginalFilename", "cdie_gui.exe"
+            VALUE "OriginalFilename", "die.exe"
             VALUE "ProductName", "cdie"
             VALUE "ProductVersion", "4.0.0.0"
         END

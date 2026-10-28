@@ -44,6 +44,8 @@
 #include <xxfclib/strings/xx_string.h>
 #include <xxfclib/global/xx_global.h>
 #include <xxfclib/rt/xx_rt.h>
+#include <xxfclib/algo/blake2/xx_blake2.h>
+#include <xxfclib/threads/xx_threads.h>
 
 #include "../app/cdie_app.h"
 
@@ -54,6 +56,74 @@ static int g_bInited = 0;
 static int g_bMainLoaded = 0;
 static char *g_pIncludeTags = NULL;
 static char *g_pExcludeTags = NULL;
+static char *g_info_path = NULL;
+static gui_backend_scan_preferences g_scan_preferences = {0, 0, 1, 0, "auto"};
+static uint64_t g_options_generation = 1, g_database_generation = 1;
+static xx_mutex_t *g_cache_lock;
+static struct {
+    char *path;
+    uint8_t digest[XX_BLAKE2SP_DIGEST_SIZE];
+    int64_t size;
+    int type_id, valid;
+    uint64_t options_generation, database_generation, hits, misses;
+    xx_scan_result result;
+} g_cache;
+
+void gui_backend_clear_cache(void)
+{
+    if (g_cache_lock) xx_mutex_lock(g_cache_lock);
+    xx_rt_free(g_cache.path);
+    g_cache.path = NULL;
+    xx_scan_result_free(&g_cache.result);
+    g_cache.valid = 0;
+    if (g_cache_lock) xx_mutex_unlock(g_cache_lock);
+}
+
+static void options_changed(void)
+{
+    ++g_options_generation;
+    gui_backend_clear_cache();
+}
+
+void gui_backend_cache_statistics(uint64_t *hits, uint64_t *misses)
+{
+    if (g_cache_lock) xx_mutex_lock(g_cache_lock);
+    if (hits) *hits = g_cache.hits;
+    if (misses) *misses = g_cache.misses;
+    if (g_cache_lock) xx_mutex_unlock(g_cache_lock);
+}
+
+size_t gui_backend_engine_count(void) { return 2; }
+const char *gui_backend_engine_id(size_t index) { return index == 0 ? "auto" : index == 1 ? "die" : NULL; }
+const char *gui_backend_engine_name(size_t index) { return index == 0 ? "Automatic" : index == 1 ? "Detect It Easy" : NULL; }
+
+static int valid_scan_preferences(const gui_backend_scan_preferences *p)
+{
+    return p && (p->recursive == 0 || p->recursive == 1) && (p->profiling == 0 || p->profiling == 1) &&
+        (p->sort == 0 || p->sort == 1) && (p->use_cache == 0 || p->use_cache == 1) &&
+        xx_rt_memchr(p->engine, 0, sizeof(p->engine)) &&
+        (!xx_rt_strcmp(p->engine, "auto") || !xx_rt_strcmp(p->engine, "die"));
+}
+
+int gui_backend_get_scan_preferences(gui_backend_scan_preferences *preferences)
+{
+    if (!preferences) return 0;
+    *preferences = g_scan_preferences;
+    return 1;
+}
+
+int gui_backend_set_scan_preferences(const gui_backend_scan_preferences *preferences)
+{
+    if (!valid_scan_preferences(preferences)) return 0;
+    if (g_scan_preferences.recursive != preferences->recursive || g_scan_preferences.profiling != preferences->profiling ||
+        g_scan_preferences.sort != preferences->sort || g_scan_preferences.use_cache != preferences->use_cache ||
+        xx_rt_strcmp(g_scan_preferences.engine, preferences->engine)) options_changed();
+    g_scan_preferences = *preferences;
+    g_options.recursive_scan = preferences->recursive != 0;
+    g_options.profiling = preferences->profiling != 0;
+    g_options.sort = preferences->sort != 0;
+    return 1;
+}
 
 /* Mirrors main_console.c's resolve_database_path with no explicit path: use
  * "<exe-dir>/<name>" when it exists, else the bare relative name. */
@@ -100,6 +170,11 @@ int gui_backend_init(void)
     g_options.heuristic_scan = 1;
     g_options.verbose = 1;
     g_options.overlay_scan = 1;
+    g_scan_preferences = (gui_backend_scan_preferences){0, 0, 1, 0, "auto"};
+    g_options.recursive_scan = false;
+    g_cache_lock = xx_mutex_create();
+    g_cache.hits = g_cache.misses = 0;
+    ++g_database_generation;
 
     g_options.main_database_path = gui_resolve_db("db");
     g_options.extra_database_path = gui_resolve_db("db_extra");
@@ -169,7 +244,34 @@ int gui_backend_set_db_paths(const char *pMain, const char *pExtra, const char *
     g_options.extra_database_path = pNewExtra;
     g_options.custom_database_path = pNewCustom;
     g_bMainLoaded = 1;
+    ++g_database_generation;
+    gui_backend_clear_cache();
     return 1;
+}
+
+int gui_backend_apply_configuration(const gui_backend_scan_preferences *preferences,
+    const char *main_path, const char *extra_path, const char *custom_path,
+    char *error, size_t error_capacity)
+{
+    const char *paths[3] = {main_path, extra_path, custom_path};
+    static const char *const names[3] = {"main", "extra", "custom"};
+    if (error && error_capacity) error[0] = 0;
+    if (!g_bInited || !valid_scan_preferences(preferences)) {
+        if (error && error_capacity) xx_rt_snprintf(error, error_capacity, "Invalid scan options or unavailable scan engine.");
+        return 0;
+    }
+    const char *current[3] = {gui_backend_main_db_path(), gui_backend_extra_db_path(), gui_backend_custom_db_path()};
+    for (size_t i = 0; i < 3; ++i) if (paths[i] && paths[i][0] && xx_rt_strcmp(paths[i], current[i]) &&
+        !xx_fs_is_dir(paths[i]) && !xx_fs_is_file(paths[i])) {
+        if (error && error_capacity) xx_rt_snprintf(error, error_capacity, "The %s database folder does not exist.", names[i]);
+        return 0;
+    }
+    if (!gui_backend_db_paths_current(main_path, extra_path, custom_path) &&
+        !gui_backend_set_db_paths(main_path, extra_path, custom_path)) {
+        if (error && error_capacity) xx_rt_snprintf(error, error_capacity, "Cannot load the selected signature databases; the main database must contain signatures.");
+        return 0;
+    }
+    return gui_backend_set_scan_preferences(preferences);
 }
 
 static int gui_same_db_path(const char *pPath, const char *pDefaultName, const char *pCurrent)
@@ -232,12 +334,16 @@ int gui_backend_set_tag_filters(const char *pIncludeTags, const char *pExcludeTa
         }
     }
 
+    int changed = xx_rt_strcmp(g_pIncludeTags ? g_pIncludeTags : "", pNewInclude ? pNewInclude : "") ||
+        xx_rt_strcmp(g_pExcludeTags ? g_pExcludeTags : "", pNewExclude ? pNewExclude : "");
     xx_rt_free(g_pIncludeTags);
     xx_rt_free(g_pExcludeTags);
     g_pIncludeTags = pNewInclude;
     g_pExcludeTags = pNewExclude;
     g_options.include_tags = g_pIncludeTags;
     g_options.exclude_tags = g_pExcludeTags;
+
+    if (changed) options_changed();
 
     return 1;
 }
@@ -249,6 +355,9 @@ const char *gui_backend_app_title(void)
 
 void gui_backend_set_flags(int bDeep, int bHeuristic, int bVerbose, int bAggressive, int bHideUnknown, int bFormat)
 {
+    if (g_options.deep_scan != (bDeep != 0) || g_options.heuristic_scan != (bHeuristic != 0) ||
+        g_options.verbose != (bVerbose != 0) || g_options.aggressive_scan != (bAggressive != 0) ||
+        g_options.hide_unknown != (bHideUnknown != 0) || g_options.format_result != (bFormat != 0)) options_changed();
     g_options.deep_scan = bDeep ? 1 : 0;
     g_options.heuristic_scan = bHeuristic ? 1 : 0;
     g_options.verbose = bVerbose ? 1 : 0;
@@ -259,6 +368,7 @@ void gui_backend_set_flags(int bDeep, int bHeuristic, int bVerbose, int bAggress
 
 void gui_backend_set_databases(int bUseExtra, int bUseCustom)
 {
+    if (g_options.use_extra_database != (bUseExtra != 0) || g_options.use_custom_database != (bUseCustom != 0)) options_changed();
     g_options.use_extra_database = bUseExtra ? 1 : 0;
     g_options.use_custom_database = bUseCustom ? 1 : 0;
 }
@@ -328,6 +438,7 @@ int gui_backend_set_optimization_options(const gui_backend_optimization_options 
     xx_set_arm_crypto_enabled(options.use_arm_crypto != 0);
     xx_set_arm_dotprod_enabled(options.use_arm_dotprod != 0);
     xx_set_arm_pmull_enabled(options.use_arm_pmull != 0);
+    options_changed();
     return 1;
 }
 
@@ -382,6 +493,7 @@ unsigned int gui_backend_get_scan_modes(void)
 int gui_backend_set_scan_modes(unsigned int modes)
 {
     if (!g_bInited || (modes & ~GUI_SCAN_MODES_MASK)) return 0;
+    if (gui_backend_get_scan_modes() != modes) options_changed();
     g_options.all_types_scan = (modes & GUI_SCAN_ALL_TYPES) != 0;
     g_options.overlay_scan = (modes & GUI_SCAN_OVERLAYS) != 0;
     g_options.resources_scan = (modes & GUI_SCAN_RESOURCES) != 0;
@@ -494,6 +606,87 @@ static char *join_errors(const xx_scan_result *result)
     return xx_buf_detach(&log, NULL);
 }
 
+static int input_identity(const char *path, uint8_t digest[XX_BLAKE2SP_DIGEST_SIZE], int64_t *size, xx_pd_struct *progress)
+{
+    xx_io_device *device = xx_io_file_open(path, "rb");
+    int ok = 0;
+    if (!device) return 0;
+    *size = xx_io_total_size(device);
+    if (*size >= 0) ok = xx_blake2sp_calc_device(device, 0, *size, digest, progress);
+    xx_io_close(device);
+    return ok;
+}
+
+static int copy_scan_result(xx_scan_result *copy, const xx_scan_result *source)
+{
+    xx_rt_memset(copy, 0, sizeof(*copy));
+    copy->sort = source->sort;
+    if (!xx_scan_append_result(NULL, copy, source, 0, NULL)) goto failed;
+    if (source->pFileName && !(copy->pFileName = cdie_strdup(source->pFileName))) goto failed;
+    return 1;
+failed:
+    xx_scan_result_free(copy);
+    return 0;
+}
+
+static int cached_result(const char *path, int type_id, const uint8_t digest[XX_BLAKE2SP_DIGEST_SIZE], int64_t size,
+                         xx_scan_result *result)
+{
+    int found = 0;
+    if (!g_cache_lock) return 0;
+    xx_mutex_lock(g_cache_lock);
+    if (g_cache.valid && g_cache.type_id == type_id && g_cache.size == size &&
+        g_cache.options_generation == g_options_generation && g_cache.database_generation == g_database_generation &&
+        !xx_rt_strcmp(path, g_cache.path) && !xx_rt_memcmp(digest, g_cache.digest, XX_BLAKE2SP_DIGEST_SIZE))
+        found = copy_scan_result(result, &g_cache.result);
+    if (found) ++g_cache.hits; else ++g_cache.misses;
+    xx_mutex_unlock(g_cache_lock);
+    return found;
+}
+
+static void save_cached_result(const char *path, int type_id, const uint8_t digest[XX_BLAKE2SP_DIGEST_SIZE], int64_t size,
+                              const xx_scan_result *result)
+{
+    char *copy_path;
+    xx_scan_result copy;
+    if (!g_cache_lock || !(copy_path = cdie_strdup(path))) return;
+    if (!copy_scan_result(&copy, result)) { xx_rt_free(copy_path); return; }
+    xx_mutex_lock(g_cache_lock);
+    gui_backend_clear_cache();
+    g_cache.path = copy_path;
+    g_cache.result = copy;
+    g_cache.type_id = type_id;
+    g_cache.size = size;
+    xx_rt_memcpy(g_cache.digest, digest, XX_BLAKE2SP_DIGEST_SIZE);
+    g_cache.options_generation = g_options_generation;
+    g_cache.database_generation = g_database_generation;
+    g_cache.valid = 1;
+    xx_mutex_unlock(g_cache_lock);
+}
+
+static int scan_configured(const char *path, int type_id, xx_scan_options *options, xx_scan_result *result, xx_pd_struct *progress)
+{
+    int ok;
+    xx_scan_options effective = *options;
+    long long started = xx_rt_clock_ms();
+    /* The legacy engine strips recursive_scan and its low-level callbacks
+     * reject it. Expose the supported native equivalent explicitly in Options:
+     * recursive requests both resource and overlay child scans. */
+    if (effective.recursive_scan) effective.overlay_scan = effective.resources_scan = true;
+    effective.recursive_scan = false;
+    /* The low-level per-script profiler writes to stdout. A GUI scan instead
+     * publishes aggregate measured work in its Log, also for expanded scans. */
+    effective.profiling = false;
+    ok = die_engine_scan_file_type_pd(path, &g_db, &effective, (XFileType)type_id, result, progress);
+    if (ok && options->profiling) {
+        char line[192];
+        xx_rt_snprintf(line, sizeof(line), "[Profiling] Detect It Easy: %d detection records, %lld ms total scan time.",
+            result->nCount, xx_rt_clock_ms() - started);
+        ok = xx_scan_result_add_error(result, line, progress);
+    }
+    return ok;
+}
+
 static int scan_results_impl(const char *pUtf8Path, int nTypeId,
     gui_backend_result_fn pResultFn, void *pUserData, char **ppResultText, char **ppTypeName, gui_backend_tree_fn tree_fn,
     gui_backend_scan_info *pInfo, xx_pd_struct *pProgress)
@@ -502,6 +695,9 @@ static int scan_results_impl(const char *pUtf8Path, int nTypeId,
     char *pText = NULL;
     char *pTypeName = NULL;
     int i;
+    uint8_t digest[XX_BLAKE2SP_DIGEST_SIZE];
+    int64_t input_size = 0;
+    int identity_valid = 0, hit = 0;
 
     if (ppResultText != NULL) {
         *ppResultText = NULL;
@@ -518,10 +714,23 @@ static int scan_results_impl(const char *pUtf8Path, int nTypeId,
     }
 
     xx_scan_options options = g_options;
-    if (!die_engine_scan_file_type_pd(pUtf8Path, &g_db, &options, (XFileType)nTypeId, &result, pProgress)) {
+    xx_rt_memset(&result, 0, sizeof(result));
+    if (g_scan_preferences.use_cache) {
+        identity_valid = input_identity(pUtf8Path, digest, &input_size, pProgress);
+        if (xx_pd_is_stopped(pProgress)) return 0;
+        if (identity_valid) hit = cached_result(pUtf8Path, nTypeId, digest, input_size, &result);
+    }
+    if (!hit && !scan_configured(pUtf8Path, nTypeId, &options, &result, pProgress)) {
         xx_scan_result_free(&result);
         return 0;
     }
+    if (!hit && identity_valid && !xx_pd_is_stopped(pProgress)) {
+        uint8_t after[XX_BLAKE2SP_DIGEST_SIZE];
+        int64_t after_size = 0;
+        if (input_identity(pUtf8Path, after, &after_size, pProgress) && input_size == after_size &&
+            !xx_rt_memcmp(digest, after, sizeof(digest))) save_cached_result(pUtf8Path, nTypeId, digest, input_size, &result);
+    }
+    if (xx_pd_is_stopped(pProgress)) { xx_scan_result_free(&result); return 0; }
 
     if (ppResultText != NULL) {
         pText = xx_scan_format_text(&result, &g_options);
@@ -663,6 +872,36 @@ static char *read_info(const char *dir, const char *file)
     return data;
 }
 
+int gui_backend_set_info_path(const char *path)
+{
+    char *copy = path && path[0] ? cdie_strdup(path) : NULL;
+    if (path && path[0] && !copy) return 0;
+    xx_rt_free(g_info_path); g_info_path = copy;
+    return 1;
+}
+
+static char *read_configured_info(const char *file)
+{
+    char *directory, *html, *path, *data = NULL;
+    if (!g_info_path || !g_info_path[0]) return NULL;
+    if (!xx_rt_strncmp(g_info_path, "$data", 5) && (!g_info_path[5] || xx_fs_is_separator(g_info_path[5]))) {
+        char *app = cdie_app_dir();
+        directory = app ? xx_fs_path_join(app, g_info_path + (g_info_path[5] ? 6 : 5)) : NULL;
+        xx_rt_free(app);
+    } else directory = cdie_strdup(g_info_path);
+    html = directory ? xx_fs_path_join(directory, "html") : NULL;
+    path = html ? xx_fs_path_join(html, file) : NULL;
+    if (path && xx_fs_is_file(path)) data = xx_fs_read_file(path, NULL);
+    xx_rt_free(path);
+    if (!data && directory) {
+        path = xx_fs_path_join(directory, file);
+        if (path && xx_fs_is_file(path)) data = xx_fs_read_file(path, NULL);
+        xx_rt_free(path);
+    }
+    xx_rt_free(html); xx_rt_free(directory);
+    return data;
+}
+
 /* The descriptions are short HTML or plain text: drop tags, keep paragraph
  * breaks and decode the common entities. */
 static char *info_plain_text(const char *html)
@@ -707,7 +946,8 @@ char *gui_backend_info_text(const char *name)
     if (!file) return NULL;
     xx_rt_memcpy(file, name, xx_rt_strlen(name));
     xx_rt_memcpy(file + xx_rt_strlen(name), ".html", 6);
-    if (g_options.main_database_path) {
+    data = read_configured_info(file);
+    if (!data && g_options.main_database_path) {
         char *parent = xx_fs_path_join(g_options.main_database_path, "..");
         if (parent) data = read_info(parent, file);
         xx_rt_free(parent);
@@ -760,7 +1000,7 @@ int gui_backend_scan_detections(const char *path, unsigned int flags, unsigned i
     options.hide_unknown = (flags & 16u) != 0;
     options.use_extra_database = (databases & 1u) != 0;
     options.use_custom_database = (databases & 2u) != 0;
-    if (!die_engine_scan_file_type_pd(path, &g_db, &options, XFT_UNKNOWN, &result, NULL)) {
+    if (!scan_configured(path, XFT_UNKNOWN, &options, &result, NULL)) {
         xx_scan_result_free(&result);
         return 0;
     }
@@ -799,6 +1039,9 @@ void gui_backend_free(void *pPtr)
 
 void gui_backend_shutdown(void)
 {
+    xx_rt_free(g_info_path); g_info_path = NULL;
+    gui_backend_clear_cache();
+    if (g_cache_lock) { xx_mutex_destroy(g_cache_lock); g_cache_lock = NULL; }
     if (g_bInited) {
         db_free(&g_db);
         xx_rt_free(g_pIncludeTags);

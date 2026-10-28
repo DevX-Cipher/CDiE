@@ -15,10 +15,10 @@ if [ -z "${CDIE_DB_ROOT:-}" ]; then
         CDIE_DB_ROOT="$HERE/../../_mylibs/Detect-It-Easy"
     fi
 fi
-CDIE_EXE="$HERE/../../cdie_build/src/console/cdie"
+CDIE_EXE="$HERE/../../cdie_build/src/console/diec"
 
 if [ ! -x "$CDIE_EXE" ]; then
-    echo "cdie not found at $CDIE_EXE"
+    echo "diec not found at $CDIE_EXE"
     echo "Build it first:  cmake -S . -B ../cdie_build && cmake --build ../cdie_build"
     exit 1
 fi

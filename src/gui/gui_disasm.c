@@ -5,6 +5,20 @@
 #include <xxfclib/threads/xx_threads.h>
 #include <xxwidgets/xxwidgets_process.h>
 
+static xxwidgets_disasm_options g_options;
+static int g_options_set;
+void gui_disasm_get_options(xxwidgets_disasm_options *options)
+{
+    if (!options) return;
+    if (!g_options_set) { xxwidgets_disasm_options_init(&g_options); g_options_set = 1; }
+    *options = g_options;
+}
+void gui_disasm_set_options(const xxwidgets_disasm_options *options)
+{
+    if (xxwidgets_disasm_options_validate(options) != XXWIDGETS_OK) return;
+    g_options = *options;
+    g_options_set = 1;
+}
 static xxwidgets_status load(void *user, uint64_t offset, size_t mode, xxwidgets_disasm_page *out)
 {
     gui_disasm_source *s = user;
@@ -20,7 +34,8 @@ static xxwidgets_status load(void *user, uint64_t offset, size_t mode, xxwidgets
         const cdie_disasm_row *r = page->rows + i;
         s->records[i] = (xxwidgets_disasm_record){r->offset, r->address, r->size, r->bytes, r->instruction, r->comment};
     }
-    *out = (xxwidgets_disasm_page){page->file_size, page->offset, page->next_offset, s->records, page->count};
+    *out = (xxwidgets_disasm_page){page->file_size, page->offset, page->next_offset, s->records, page->count,
+        (mode ? mode : cdie_disasm_get_info(s->context)->detected_mode) >= CDIE_DISASM_ARM};
     return XXWIDGETS_OK;
 }
 void gui_disasm_source_init(gui_disasm_source *s, cdie_disasm_context *context, const char *path)
@@ -29,6 +44,7 @@ void gui_disasm_source_init(gui_disasm_source *s, cdie_disasm_context *context, 
     size_t i, count = cdie_disasm_mode_count();
     xx_rt_memset(s, 0, sizeof(*s));
     s->context = context;
+    { xxwidgets_disasm_options options; gui_disasm_get_options(&options); cdie_disasm_set_syntax(context, options.syntax); }
     for (i = 0; i < count; ++i)
         s->names[i] = cdie_disasm_mode_name(i);
     s->source = (xxwidgets_disasm_source){path, info->description, info->file_size, info->initial_offset, s->names, count, 0, load, s};
@@ -36,6 +52,9 @@ void gui_disasm_source_init(gui_disasm_source *s, cdie_disasm_context *context, 
 static xxwidgets_status show_disasm(xxwidgets_widget *owner, const char *path, cdie_disasm_context *context)
 {
     gui_disasm_source source;
+    xxwidgets_disasm_options options;
+    gui_disasm_get_options(&options);
+    { xxwidgets_status status = xxwidgets_app_set_disasm_options(xxwidgets_widget_app(owner), &options); if (status != XXWIDGETS_OK) return status; }
     gui_disasm_source_init(&source, context, path);
     return xxwidgets_disasm_dialog(owner, CDIE_TR("Disasm"), &source.source);
 }

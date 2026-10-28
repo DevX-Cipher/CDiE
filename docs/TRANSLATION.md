@@ -1,19 +1,18 @@
-# GUI and TUI translation
+# GUI translation
 
-The interactive CDiE frontends use the UTF-8 PO reader from xxfclib through
+The native CDiE GUI uses the UTF-8 PO reader from xxfclib through
 xxwidgets. One catalog translates both CDiE captions and xxwidgets controls.
 The scan engine retains its identifiers and report data. Console scanning and
 structured reports keep their existing output.
 
-Select a catalog when starting a frontend:
+Select a catalog when starting the GUI:
 
 ```sh
-cdie_gui --translation /path/to/de.po file.bin
-cdie_tui --translation /path/to/de.po file.bin
-CDIE_TRANSLATION=/path/to/de.po cdie_tui file.bin
+die --translation /path/to/de.po file.bin
+CDIE_TRANSLATION=/path/to/de.po die file.bin
 ```
 
-On Windows, the same option works with `cdie_gui.exe` and `cdie_tui.exe`;
+On Windows, the same option works with `die.exe`;
 Unicode command-line and environment paths are converted to UTF-8. Options may
 precede or follow the initial file; `--` ends option recognition. An explicit
 `--translation` overrides the environment. Repeated explicit options use the
@@ -24,7 +23,7 @@ The catalog is loaded before controls are created, so initial captions, common
 buttons, scan options, status text and modal titles share the selected language.
 An unreadable or malformed catalog reports an error at startup. Missing, empty
 or fuzzy messages fall back to the original English. Languages are selected at
-startup; changing already-created labels requires restarting the frontend.
+startup; changing already-created labels requires restarting the GUI.
 
 `translations/de.po` is a partial German example. It includes shared xxwidgets
 messages and CDiE captions. Untranslated text remains English. The template
@@ -61,7 +60,7 @@ incomplete final character. This validation also works for Cocoa `%@` messages.
 The template marks formatted messages so `msgfmt --check` can validate them.
 
 The small helper in `src/app/cdie_translation.*` binds the single interactive
-application without owning its catalog. GUI/TUI startup calls
+application without owning its catalog. GUI startup calls
 `cdie_translation_open` before creating controls and unbinds before destroying
 the xxwidgets app. Other engine and library entry points do not acquire this
 process-local UI binding.
@@ -76,7 +75,6 @@ cmake --build build --target cdie_test_translation
 ctest --test-dir build -R '^cdie.translation$' --output-on-failure
 ```
 
-Linux GUI tests use a virtual display when `xvfb-run` is available. TUI-only
-POSIX builds use a pseudo-terminal when Python is available. The regression
+Linux GUI tests use a virtual display when `xvfb-run` is available. The regression
 checks command-line parsing, shared widget/application messages, failure
 preservation, environment precedence, format rejection and UTF-8 truncation.

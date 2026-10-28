@@ -4,6 +4,8 @@
 
 #include <xxwidgets/xxwidgets_options_pages.h>
 #include "gui_scan_options.h"
+#include "gui_preferences.h"
+#include <xxwidgets/xxwidgets_disasm_options.h>
 
 /* Pages of the shared Options window, in Detect It Easy's order. */
 typedef enum gui_options_page_id {
@@ -13,6 +15,10 @@ typedef enum gui_options_page_id {
     GUI_OPTIONS_SIGNATURES,
     GUI_OPTIONS_HEX,
     GUI_OPTIONS_OPTIMIZATION,
+    GUI_OPTIONS_APPEARANCE,
+    GUI_OPTIONS_DISASM,
+    GUI_OPTIONS_ONLINE,
+    GUI_OPTIONS_INFO,
     GUI_OPTIONS_PAGE_COUNT
 } gui_options_page_id;
 #define GUI_OPTIONS_PAGE(id) (1u << (id))
@@ -22,6 +28,13 @@ typedef struct gui_options_values {
     gui_scan_page_values scan; /* Flags, databases and expansion modes. */
     xxwidgets_font_options fonts;
     xxwidgets_hex_options hex;
+    xxwidgets_disasm_options disasm;
+    gui_appearance_preferences appearance;
+    gui_file_preferences file;
+    gui_database_preferences databases;
+    gui_signatures_preferences signatures;
+    gui_online_preferences online;
+    gui_info_preferences info;
 } gui_options_values;
 
 typedef struct gui_options_host {
@@ -33,11 +46,16 @@ typedef struct gui_options_host {
     void *user;
 } gui_options_host;
 
-/* Shows Options on *page and stores the last page shown there. On OK values
- * receive the edited settings and the CPU optimization is applied to the
- * backend; the caller applies the rest. *databases_reloaded reports that the
- * signatures were reloaded, which a later page rejecting OK followed by
- * Cancel can leave in place too: refresh tags and results whenever it is set. */
+/* Initialize every preference before overlaying current frontend state. The
+ * process copy stores preferences with no independent frontend getter. */
+void gui_options_values_init(gui_options_values *values);
+void gui_preferences_get(gui_options_values *values);
+void gui_preferences_set(const gui_options_values *values);
+
+/* Shows Options on *page and records the last selected category. Forms edit
+ * a private copy. OK validates every category before the final backend commit;
+ * Cancel/Escape/close preserve values and database/optimization state.
+ * databases_reloaded reports a successfully committed database change. */
 xxwidgets_status gui_options_dialog(xxwidgets_widget *owner, const gui_options_host *host, gui_options_page_id *page,
                                     gui_options_values *values, int *accepted, int *databases_reloaded);
 

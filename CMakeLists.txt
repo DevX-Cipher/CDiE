@@ -29,6 +29,9 @@ set(X_MAINTAINER  "horsicq@gmail.com")
 # The warning flags themselves are applied further down, after xxfclib has been
 # added -- see the note there.
 
+# Database creation needs plain TAR writing; other archive formats are read-only.
+set(XXFC_DIE_ENGINE_TAR_ONLY_WRITING ON)
+
 # Compile only the optional format streams used by this application.
 if(NOT TARGET xxfclib::xxfclib)
     set(XXFC_ENABLE_STREAM_DATASTRUCTS ON)
@@ -47,14 +50,8 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 option(CDIE_WERROR "Treat compiler warnings as errors" OFF)
 
-option(CDIE_BUILD_CONSOLE "Build the command-line scanner" ON)
-option(CDIE_BUILD_TUI "Build the interactive terminal scanner" ON)
-set(_CDIE_GUI_DEFAULT OFF)
-if(WIN32 OR APPLE)
-    set(_CDIE_GUI_DEFAULT ON)
-endif()
-option(CDIE_BUILD_GUI "Build the native desktop scanner" ${_CDIE_GUI_DEFAULT})
-unset(_CDIE_GUI_DEFAULT)
+# Supported frontend matrix and migration of cached legacy TUI settings.
+include("${CMAKE_CURRENT_LIST_DIR}/cmake/cdie_frontends.cmake")
 if(CDIE_BUILD_GUI AND NOT (WIN32 OR APPLE OR (UNIX AND NOT APPLE)))
     message(FATAL_ERROR "The cdie native GUI requires Windows, macOS, or a GTK desktop")
 endif()
@@ -63,6 +60,8 @@ endif()
 # compatible upstream corpus: decoding/assembly, bytecode, demangling,
 # emulation and file formats. The older ASM-only switch remains available for
 # callers that use the focused dependency check.
+set(XXFC_CDISASM_ENABLE_MIPS OFF)
+set(XXFC_CDISASM_ENABLE_EXTRA OFF)
 option(CDIE_BUILD_PRIVATE_RADARE2_TESTS
     "Build all private Radare2-derived compatibility tests" OFF)
 option(CDIE_BUILD_PRIVATE_ASM_TESTS
@@ -97,7 +96,8 @@ if(CDIE_BUILD_PRIVATE_RADARE2_TESTS)
     set(XXFC_BUILD_RADARE2_PRIVATE_TESTS ON)
 endif()
 
-# The GUI disassembler uses the existing x86 and ARM/Thumb/AArch64 decoders.
+# Normal builds retain only base x86 and ARM/Thumb/AArch64 instructions.
+# Extended opcode coverage is reserved for the opt-in private compatibility gate.
 option(CDIE_DISASM_ARM "Include ARM/Thumb/AArch64 in the GUI disassembler" ON)
 if(NOT (CDIE_BUILD_PRIVATE_ASM_TESTS OR CDIE_BUILD_PRIVATE_RADARE2_TESTS))
     set(XXFC_CDISASM_ENABLE_ARM ${CDIE_DISASM_ARM})
@@ -306,9 +306,6 @@ endif()
 option(CDIE_BUILD_TESTS "Build the public compatibility tests" OFF)
 
 if(CDIE_BUILD_TESTS)
-    if(NOT CDIE_BUILD_CONSOLE)
-        message(FATAL_ERROR "CDIE_BUILD_TESTS requires CDIE_BUILD_CONSOLE=ON")
-    endif()
     enable_testing()
     add_subdirectory(tests)
 endif()
@@ -398,6 +395,12 @@ endif()
 # -------------------------------------------------------------------- CPack
 
 if(WIN32)
+    # Windows releases are ready-to-run archives. The marker belongs beside
+    # every frontend executable, so extraction immediately selects local INI.
+    set(CPACK_GENERATOR "ZIP")
+    set(CPACK_BINARY_ZIP ON)
+    set(CPACK_BINARY_NSIS OFF)
+    install(FILES "${CMAKE_CURRENT_LIST_DIR}/packaging/windows/PORTABLE" DESTINATION ".")
     set(CDIE_OSNAME "win")
 elseif(APPLE)
     set(CDIE_OSNAME "mac")
@@ -456,11 +459,11 @@ set(CPACK_COMPONENTS_ALL_IN_ONE_PACKAGE ON)
 
 include(CPack)
 
-# GUI/TUI localization is independent of console and engine compatibility tests.
+# GUI localization is independent of console and engine compatibility tests.
 option(CDIE_BUILD_TRANSLATION_TESTS "Build interactive translation regressions" OFF)
 if(CDIE_BUILD_TRANSLATION_TESTS)
     if(NOT TARGET cdie_ui_translation)
-        message(FATAL_ERROR "Translation tests require CDIE_BUILD_GUI or CDIE_BUILD_TUI")
+        message(FATAL_ERROR "Translation tests require CDIE_BUILD_GUI")
     endif()
     enable_testing()
     add_subdirectory(tests/translation)

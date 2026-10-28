@@ -8,7 +8,8 @@
 /* The Options settings between runs, under Detect It Easy's key names.
  * Store: the INI file named by CDIE_SETTINGS; else cdie.ini beside the
  * executable when a file named "portable" is there; else the platform store
- * NTInfo/cdie (HKCU registry, ~/.config/NTInfo/cdie.conf, preferences).
+ * NTInfo/cdie (HKCU registry, ~/.config/NTInfo/cdie.conf, preferences), selected
+ * by xx_settings_create_application. Portable storage never falls back to native.
  * memory_only (smoke tests) never touches disk. *loaded is 0 when stored
  * settings could not be read; the frontend then continues with defaults. */
 xx_settings *gui_settings_open(int memory_only, int *loaded);

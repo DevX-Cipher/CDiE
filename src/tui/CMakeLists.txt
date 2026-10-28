@@ -5,7 +5,9 @@ add_executable(cdie_tui
     ../gui/gui_tree.c
     ../gui/gui_scan_options.c
     ../gui/gui_options.c
+    ../gui/gui_options_extra.c
     ../gui/gui_settings.c
+    ../gui/gui_preferences.c
     ../gui/gui_about.c
     ../gui/gui_png.c
     ../gui/gui_result_tree.c)

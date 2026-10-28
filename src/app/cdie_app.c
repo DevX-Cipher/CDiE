@@ -91,6 +91,8 @@ static char *cdie_dir_of(const char *pPath)
         return cdie_strdup("");
     }
     nLength = (size_t)(pLast - pPath);
+    /* Keep the separator for filesystem and Windows drive roots. */
+    if (!nLength || pPath[nLength - 1] == ':') ++nLength;
     pResult = (char *)xx_rt_malloc(nLength + 1U);
     if (!pResult) {
         return NULL;
@@ -103,16 +105,29 @@ static char *cdie_dir_of(const char *pPath)
 char *cdie_app_dir(void)
 {
 #if defined(_WIN32)
-    char sPath[MAX_PATH * 2];
-    DWORD nLen = GetModuleFileNameA(NULL, sPath, (DWORD)sizeof(sPath));
-
-    if ((nLen == 0) || (nLen >= sizeof(sPath))) {
-        return cdie_strdup(".");
+    DWORD capacity = 512;
+    /* Settings and databases use UTF-8 paths, including installations outside
+     * the active Windows code page and paths longer than MAX_PATH. */
+    while (capacity <= 32768) {
+        WCHAR *wide = xx_rt_malloc((size_t)capacity * sizeof(*wide));
+        DWORD length;
+        char *utf8, *result;
+        if (!wide) return NULL;
+        length = GetModuleFileNameW(NULL, wide, capacity);
+        if (!length) { xx_rt_free(wide); return NULL; }
+        if (length < capacity) {
+            wide[length] = 0;
+            utf8 = xx_rt_utf16_to_utf8(wide);
+            xx_rt_free(wide);
+            if (!utf8) return NULL;
+            result = cdie_dir_of(utf8);
+            xx_rt_free(utf8);
+            return result;
+        }
+        xx_rt_free(wide);
+        capacity *= 2;
     }
-
-    sPath[nLen] = 0;
-
-    return cdie_dir_of(sPath);
+    return NULL;
 #elif defined(__APPLE__)
     char sPath[4096];
     uint32_t nPathSize = (uint32_t)sizeof(sPath);

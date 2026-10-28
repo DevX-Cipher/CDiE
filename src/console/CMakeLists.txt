@@ -9,6 +9,9 @@ add_executable(cdie
     ${CMAKE_CURRENT_LIST_DIR}/../app/cdie_strings.c
 )
 
+set_target_properties(cdie PROPERTIES OUTPUT_NAME "diec")
+target_compile_definitions(cdie PRIVATE X_APPLICATIONNAME=\"diec\")
+
 target_include_directories(cdie PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
 
 target_link_libraries(cdie PRIVATE xxfclib::die_engine)

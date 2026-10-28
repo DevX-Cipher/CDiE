@@ -45,6 +45,8 @@ typedef enum cdie_disasm_status {
  * Context owns its device/readers and error uses xx_rt_free. */
 int cdie_disasm_open(const char *path, xx_pd_struct *progress, cdie_disasm_context **context, char **error);
 void cdie_disasm_close(cdie_disasm_context *context);
+/* 0 Intel, 1 AT&T for x86; ARM syntax is unaffected. Invalid input is rejected. */
+int cdie_disasm_set_syntax(cdie_disasm_context *context, int syntax);
 const cdie_disasm_info *cdie_disasm_get_info(const cdie_disasm_context *context);
 size_t cdie_disasm_mode_count(void);
 const char *cdie_disasm_mode_name(size_t mode);

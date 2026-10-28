@@ -42,9 +42,9 @@ list(REMOVE_ITEM CDIE_LIB_SOURCES
 set(CDIE_SOURCES "${CDIE_SOURCES}" PARENT_SCOPE)
 set(CDIE_LIB_SOURCES "${CDIE_LIB_SOURCES}" PARENT_SCOPE)
 
-# Both interactive frontends use the same widget library. A TUI-only build
-# selects its terminal backend without requiring a desktop toolkit.
-if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
+# The desktop frontend uses the shared widget library. Its terminal backend
+# remains available to developer probes, but no TUI application is built.
+if(CDIE_BUILD_GUI)
     if(CMAKE_VERSION VERSION_LESS 3.21)
         message(FATAL_ERROR "cdie GUI/TUI builds require CMake 3.21 or newer")
     endif()
@@ -64,9 +64,6 @@ if(CDIE_BUILD_GUI OR CDIE_BUILD_TUI)
             set(XXWIDGETS_BUILD_TESTS OFF)
             if(XXFCLIB_DIR)
                 set(XXWIDGETS_XXFCLIB_DIR "${XXFCLIB_DIR}")
-            endif()
-            if(NOT CDIE_BUILD_GUI)
-                set(XXWIDGETS_NATIVE_BACKEND none)
             endif()
             add_subdirectory("${CDIE_XXWIDGETS_DIR}" "${CMAKE_BINARY_DIR}/xxwidgets" EXCLUDE_FROM_ALL)
         endfunction()
@@ -148,7 +145,4 @@ if(CDIE_BUILD_CONSOLE)
 endif()
 if(CDIE_BUILD_GUI)
     add_subdirectory(gui)
-endif()
-if(CDIE_BUILD_TUI)
-    add_subdirectory(tui)
 endif()

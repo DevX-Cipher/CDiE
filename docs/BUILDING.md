@@ -15,8 +15,8 @@ source tree.
 The earlier scanner build was tested with MSVC 19.44 (Visual Studio 2022) on
 Windows and GCC 11.4 on Linux, with identical scan output. The `cdisasm`
 version builds with Clang 21 on Linux and passes the two available CDiE tests.
-Recheck corpus parity after the decoder migration. The console and Cocoa GUI
-also build with AppleClang on macOS ARM64; the GUI smoke test exercises a
+Recheck corpus parity after the decoder migration. The Cocoa GUI
+also builds with AppleClang on macOS ARM64; the GUI smoke test exercises a
 native Mach-O scan. This does not replace a full corpus parity run.
 
 The CDiE sources compile as **strict ISO C99** — `CMAKE_C_EXTENSIONS` is `OFF`,
@@ -39,53 +39,34 @@ cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release
 cmake --build cdie_build
 ```
 
-The console binary lands in `cdie_build/src/console/cdie` (`.exe` on Windows).
-The terminal frontend is `cdie_build/src/tui/cdie_tui`; macOS and Windows also
-build `cdie_gui`. Select frontends with `CDIE_BUILD_CONSOLE`, `CDIE_BUILD_TUI`,
-and `CDIE_BUILD_GUI`. Console and TUI default to ON; the native GUI defaults
-to ON only on macOS and Windows. GUI/TUI require CMake 3.21+ and `xxwidgets`
-(set `CDIE_XXWIDGETS_DIR` to override its location).
+Windows and Linux build the native GUI and console scanner. Their output
+names are `src/gui/die` and `src/console/diec`, with `.exe` on Windows.
+macOS builds only `src/gui/die.app`. The TUI application is disabled on all
+platforms, including when an older build cache enables `CDIE_BUILD_TUI`.
 
-For a console-only build, set `CDIE_BUILD_TUI=OFF` and `CDIE_BUILD_GUI=OFF`.
-Set `CDIE_BUILD_LIBRARY=OFF` as well to omit the separate library targets.
-TUI builds with `CDIE_BUILD_GUI=OFF` use the terminal backend without a native
-desktop toolkit.
-
-### Terminal interface
+The internal CMake targets remain `cdie_gui` and `cdie`. Select the supported
+frontends with `CDIE_BUILD_GUI` and `CDIE_BUILD_CONSOLE`; the console is always
+disabled on macOS. The GUI requires CMake 3.21+ and `xxwidgets` (set
+`CDIE_XXWIDGETS_DIR` to override its location). Linux additionally requires
+`pkg-config` and GTK 3 development files (`gtk+-3.0` >= 3.16), for example:
 
 ```bash
-cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release \
-  -DCDIE_DATABASE_DIR=/path/to/Detect-It-Easy
-cmake --build cdie_build --target cdie cdie_tui cdie_gui --parallel
-cdie_build/src/tui/cdie_tui /path/to/target
+sudo apt-get install pkg-config libgtk-3-dev
 ```
 
-On Linux, enable the GTK GUI with `-DCDIE_BUILD_GUI=ON` and install the GTK 3
-development package (`gtk+-3.0` >= 3.16). Without it, omit `cdie_gui` from the
-build command. The TUI accepts an optional startup file and shares the scanner's
-engine, result tree, flag and database controls, and full report display.
-Use `cdie_tui --help` for terminal requirements and keyboard shortcuts.
-Run it in an interactive terminal rather than redirecting input or output;
-`--help` and `--version` also work with redirected output. On Windows, append
-`.exe` to the executable name.
-
-Enter or F5 scans the path, Tab switches controls, Ctrl+O focuses the path,
-Ctrl+R opens the complete report, F1 displays help, and Ctrl+Q quits. The shared
-scan panel provides flags, optional databases, a colored result tree and a
-cancellable progress dialog. Scans run on a worker thread. `-D`, `-E` and `-C`
-select signature directories; otherwise the executable-directory/working-directory
-search applies. The TUI uses a hosted C runtime, as the desktop GUI does.
+On Windows or Linux, set `CDIE_BUILD_GUI=OFF` for a console-only developer
+build. Set `CDIE_BUILD_LIBRARY=OFF` to omit the separate library targets.
 
 ### Linux GTK GUI
 
 ```bash
 cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release -DCDIE_BUILD_GUI=ON
 cmake --build cdie_build --target cdie_gui --parallel
-cdie_build/src/gui/cdie_gui /path/to/target
+cdie_build/src/gui/die /path/to/target
 ```
 
 For a headless startup and scan check, run `xvfb-run -a
-cdie_build/src/gui/cdie_gui --smoke-test /path/to/target`. Signature databases
+cdie_build/src/gui/die --smoke-test /path/to/target`. Signature databases
 selected by `CDIE_DATABASE_DIR` are staged beside the executable. The Linux
 frontend also opens without a database; use Database paths (F3) to load the main,
 extra and custom folders. Fonts (F4) edits the shared role-based font settings.
@@ -97,31 +78,33 @@ acceptance/cancellation, default paths, font validation and rendered font change
 It repeats the checks without a database beside the executable to cover recovery.
 
 The build stages `db/`, `db_extra/`, and `db_custom/` from `CDIE_DATABASE_DIR`
-beside the console and TUI executables. The macOS GUI carries the same folders
-inside its app bundle. `CDIE_DATABASE_DIR=NONE` disables this staging.
+beside the console and Linux GUI executables. The macOS GUI carries the same
+folders inside its app bundle. Linux installs both `die` and `diec` into
+`bin/`, sharing the databases in `bin/db`, `bin/db_extra` and `bin/db_custom`.
+`CDIE_DATABASE_DIR=NONE` disables this staging.
 
-With the local thin wrapper, configure and build all three using:
+With the local thin wrapper on Windows or Linux, build both frontends using:
 
 ```bash
 cmake -S ~/ownCloud_build/cdie -B ~/ownCloud_build/cdie/build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCDIE_BUILD_GUI=ON -DCDIE_BUILD_TUI=ON -DCDIE_BUILD_CONSOLE=ON
-cmake --build ~/ownCloud_build/cdie/build --target cdie_gui cdie_tui cdie --parallel
+  -DCDIE_BUILD_GUI=ON -DCDIE_BUILD_CONSOLE=ON
+cmake --build ~/ownCloud_build/cdie/build --target cdie_gui cdie --parallel
 ```
 
-The wrapper puts these outputs under `build/cdie/src/gui/`, `build/cdie/src/tui/`,
-and `build/cdie/src/console/`, respectively.
+The wrapper puts these outputs under `build/cdie/src/gui/` and
+`build/cdie/src/console/`, respectively. A macOS build produces only the GUI.
 
 ### macOS GUI
 
 Use Xcode Command Line Tools (including the macOS SDK and Objective-C compiler)
-and CMake 3.21+ for the xxwidgets Cocoa backend. The GUI is built automatically:
+and CMake 3.21+ for the xxwidgets Cocoa backend. macOS builds only the GUI:
 
 ```bash
 cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release \
   -DCDIE_DATABASE_DIR=/path/to/Detect-It-Easy
 cmake --build cdie_build --parallel
-open cdie_build/src/gui/cdie_gui.app
+open cdie_build/src/gui/die.app
 ```
 
 `CDIE_DATABASE_DIR` contains `db/`, optionally `db_extra/` and `db_custom/`.
@@ -139,8 +122,7 @@ integration is specific to the Windows front end.
 Run the Cocoa smoke test in a logged-in desktop session:
 
 ```bash
-cdie_build/src/gui/cdie_gui.app/Contents/MacOS/cdie_gui --smoke-test \
-  cdie_build/src/console/cdie
+cdie_build/src/gui/die.app/Contents/MacOS/die --smoke-test /usr/bin/file
 ```
 
 It checks bundled database loading, scanning, explicit Binary selection, report
@@ -163,7 +145,7 @@ the option `CDIE_NO_CRT` defaults to `ON`, the entry point becomes
 `KERNEL32.dll`.
 
 ```text
-> dumpbin /imports cdie.exe
+> dumpbin /imports diec.exe
     KERNEL32.dll
 ```
 
@@ -181,7 +163,7 @@ It is already off for Win32 and ARM64EC MSVC, for non-MSVC compilers and for
 every non-Windows target — see [LIMITATIONS.md](LIMITATIONS.md#runtime) for
 why.
 
-Only the console `cdie` executable is CRT-free. The libraries (below) link the
+Only the console `diec` executable is CRT-free. The libraries (below) link the
 dynamic CRT so they interoperate with normally-compiled consumers.
 
 Two rules apply when adding code that will be compiled into this build:
@@ -195,7 +177,7 @@ Two rules apply when adding code that will be compiled into this build:
 
 ### Windows GUI
 
-The Windows build also produces `src/gui/cdie_gui.exe`. Its native front end
+The Windows build also produces `src/gui/die.exe`. Its native front end
 uses `dep/xxwidgets` when populated, otherwise the sibling
 `../_mylibs/xxwidgets` (override `CDIE_XXWIDGETS_DIR` when it is elsewhere).
 The reusable `xxwidgets_scan_panel` provides a result tree, Flags
@@ -255,12 +237,18 @@ publishes all three to the `Beta` prerelease after checking that `master` still
 points at the packaged commit.
 
 The builds use the same resolved revisions of `xxfclib`, `cdisasm`, and the
-Detect It Easy signature database; Windows also uses `xxwidgets`. These are
-checked out from the `horsicq` GitHub repositories into `dep/`. If any of those
+Detect It Easy signature database; every native GUI also uses `xxwidgets`.
+These are checked out from the `horsicq` GitHub repositories into `dep/`. If any of those
 repositories are private, add a `CDIE_DEPS_TOKEN` Actions secret with read
 access to them. Public repositories work with the workflow's default token.
 
 ### Windows portable package
+
+Windows packaging defaults to a CPack ZIP archive. Its root contains an empty
+`PORTABLE` file beside `die.exe` and `diec.exe`. The package contains no TUI
+application. The extracted GUI saves Options in `cdie.ini` in that same directory. The native settings backend is used when
+the marker is absent. The xxfclib `xx_settings_is_portable()` function checks
+this executable-local marker; legacy lowercase `portable` remains supported.
 
 ```bat
 packaging\windows\build_portable_windows.cmd <cmake-platform> <package-suffix>
@@ -290,7 +278,8 @@ Following the repo convention, build trees and CPack staging live under
 ```text
 release\
 ├── cdie_win64_msvc2022_portable_1.0.0\   ready-to-run folder
-│   ├── cdie.exe
+│   ├── die.exe  diec.exe
+│   ├── PORTABLE                       empty portable-mode marker
 │   ├── db\  db_extra\  db_custom\
 │   ├── docs\
 │   ├── licenses\cdisasm\
@@ -321,11 +310,11 @@ cmake -S cdie_source -B cdie_build -DCDIE_DATABASE_DIR=/opt/detect-it-easy
 cmake -S cdie_source -B cdie_build -DCDIE_DATABASE_DIR=NONE
 ```
 
-Because `cdie` looks for `db`, `db_extra` and `db_custom` next to its own
+Because `diec` looks for `db`, `db_extra` and `db_custom` next to its own
 executable, an extracted package runs with no arguments at all:
 
 ```text
-> cdie.exe C:\utils\python3\python.exe
+> diec.exe C:\utils\python3\python.exe
 PE64
     Linker: Microsoft Linker(14.50.35225)
     Compiler: Microsoft Visual C/C++(19.50.35225)[POGO_O_C]
@@ -347,7 +336,7 @@ cpack --config cdie_build/CPackConfig.cmake -G TGZ
 ## Running
 
 ```bash
-cdie -D /path/to/Detect-It-Easy/db \
+diec -D /path/to/Detect-It-Easy/db \
      -E /path/to/Detect-It-Easy/db_extra \
      -C /path/to/Detect-It-Easy/db_custom \
      target.exe
@@ -373,27 +362,28 @@ script can use it directly. See
 ## Comparing against the reference
 
 The point of the port is byte-identical output, so the natural test is a diff
-against `diec`:
+against the original Qt `diec` (use separate paths because both console
+executables are named `diec`):
 
 ```powershell
 $root = "C:\path\to\Detect-It-Easy"
 $a = & "$root\diec.exe" $target | Out-String
-$b = & cdie.exe -D "$root\db" -E "$root\db_extra" -C "$root\db_custom" $target | Out-String
+$b = & ".\cdie_build\src\console\diec.exe" -D "$root\db" -E "$root\db_extra" -C "$root\db_custom" $target | Out-String
 if ($a.Trim() -eq $b.Trim()) { "IDENTICAL" } else { "DIFFERENT" }
 ```
 
 ```bash
-diff <(diec "$target") <(cdie -D "$root/db" -E "$root/db_extra" -C "$root/db_custom" "$target")
+diff <(diec "$target") <(./cdie_build/src/console/diec -D "$root/db" -E "$root/db_extra" -C "$root/db_custom" "$target")
 ```
 
 ### Two traps when comparing on Windows
 
 * **Pass the same databases.** `diec` loads `db`, `db_extra` and `db_custom`
-  from its own directory. If you only give `cdie` the main database, extra
+  from its own directory. If you only give this port the main database, extra
   detections such as `Microsoft Visual C/C++(…, by EP)` will be missing.
 * **Watch WOW64 redirection.** The stock `diec.exe` is a 32-bit binary, so
   `C:\Windows\System32\foo.dll` silently resolves to `SysWOW64\foo.dll` for
-  it but not for a 64-bit `cdie`. Compare inside `SysWOW64` (or any
+  it but not for a 64-bit build of this port. Compare inside `SysWOW64` (or any
   non-redirected directory) to avoid diffing two different files.
 
 ## Checking the database parses

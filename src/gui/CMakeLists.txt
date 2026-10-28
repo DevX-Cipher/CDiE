@@ -12,7 +12,7 @@ if(APPLE)
     target_link_libraries(cdie_gui PRIVATE "${CDIE_APPKIT_FRAMEWORK}")
     set_target_properties(cdie_gui PROPERTIES
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in"
-        MACOSX_BUNDLE_BUNDLE_NAME "cdie"
+        MACOSX_BUNDLE_BUNDLE_NAME "die"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.ntinfo.cdie"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${CDIE_VERSION}"
         MACOSX_BUNDLE_BUNDLE_VERSION "${CDIE_VERSION}")
@@ -27,6 +27,10 @@ if(APPLE)
             -P "${CMAKE_CURRENT_LIST_DIR}/bundle_resources.cmake"
         VERBATIM)
 elseif(WIN32)
+    # rc.exe does not report embedded icon/manifest files as dependencies.
+    set_property(SOURCE cdie_gui.rc APPEND PROPERTY OBJECT_DEPENDS
+        "${CMAKE_CURRENT_LIST_DIR}/images/main.ico"
+        "${CMAKE_CURRENT_LIST_DIR}/cdie_gui.manifest")
     add_executable(cdie_gui WIN32
         ${CDIE_LIB_SOURCES} gui_backend.c main_gui.c gui_entry.c cdie_gui.rc)
     cdie_stage_frontend_translations(cdie_gui)
@@ -38,6 +42,8 @@ else()
     target_link_libraries(cdie_gui PRIVATE PkgConfig::CDIE_GTK3 m)
     cdie_stage_frontend_resources(cdie_gui)
 endif()
+set_target_properties(cdie_gui PROPERTIES OUTPUT_NAME "die")
+
 # The About picture, embedded for every platform.
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c"
     COMMAND "${CMAKE_COMMAND}" "-DINPUT=${CMAKE_CURRENT_LIST_DIR}/images/about.png"
@@ -45,7 +51,7 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c"
         -P "${CMAKE_CURRENT_LIST_DIR}/embed_file.cmake"
     DEPENDS "${CMAKE_CURRENT_LIST_DIR}/images/about.png" "${CMAKE_CURRENT_LIST_DIR}/embed_file.cmake"
     VERBATIM)
-target_sources(cdie_gui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c" gui_about.c gui_options.c gui_settings.c gui_png.c gui_tree.c gui_result_tree.c gui_scan_options.c gui_file_information.c gui_entropy.c gui_hash.c gui_strings.c gui_hex_view.c gui_disasm.c gui_memory_map.c gui_imports.c gui_exports.c gui_resources.c gui_symbols.c ../app/cdie_symbols.c ../app/cdie_resources.c ../app/cdie_exports.c ../app/cdie_imports.c ../app/cdie_memory_map.c ../app/cdie_disasm.c ../app/cdie_strings.c ../app/cdie_hash.c ../app/cdie_entropy.c ../app/cdie_file_info.c)
+target_sources(cdie_gui PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/cdie_about_image.c" gui_about.c gui_options.c gui_settings.c gui_preferences.c gui_options_extra.c gui_frontend_preferences.c gui_png.c gui_tree.c gui_result_tree.c gui_scan_options.c gui_file_information.c gui_entropy.c gui_hash.c gui_strings.c gui_strings_source.c gui_extractor.c gui_extractor_source.c gui_hex_view.c gui_disasm.c gui_memory_map.c gui_imports.c gui_exports.c gui_resources.c gui_symbols.c ../app/cdie_symbols.c ../app/cdie_resources.c ../app/cdie_exports.c ../app/cdie_imports.c ../app/cdie_memory_map.c ../app/cdie_disasm.c ../app/cdie_strings.c ../app/cdie_hash.c ../app/cdie_entropy.c ../app/cdie_file_info.c)
 target_include_directories(cdie_gui PRIVATE ${CMAKE_CURRENT_LIST_DIR}/..)
 target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets cdie_ui_translation cdie_settings cdisasm::cdisasm)
 
@@ -68,7 +74,12 @@ if(MSVC)
     endif()
 endif()
 
-install(TARGETS cdie_gui BUNDLE DESTINATION "." RUNTIME DESTINATION ".")
+if(UNIX AND NOT APPLE)
+    include(GNUInstallDirs)
+    install(TARGETS cdie_gui RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+else()
+    install(TARGETS cdie_gui BUNDLE DESTINATION "." RUNTIME DESTINATION ".")
+endif()
 
 if(CDIE_BUILD_TESTS AND UNIX AND NOT APPLE)
     get_target_property(_cdie_gui_test_sources cdie_gui SOURCES)

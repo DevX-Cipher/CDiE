@@ -2,7 +2,7 @@
 # ----------------------------------------------------------------------------
 # Build cdie with TCC (Tiny C Compiler) on a POSIX host. Produces, in build_tcc/:
 #
-#   cdie        the console scanner
+#   diec        the console scanner
 #   libdie.so   the die_library-compatible shared library
 #   libdie.a    the static library
 #
@@ -11,6 +11,11 @@
 # Usage:  run/build_tcc.sh      (tcc on PATH, or TCC=/path/to/tcc run/build_tcc.sh)
 # ----------------------------------------------------------------------------
 set -e
+
+if [ "$(uname -s)" = Darwin ]; then
+    echo "macOS provides the GUI only. Build die.app with CMake instead." >&2
+    exit 1
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$ROOT/src"
@@ -30,14 +35,14 @@ mkdir -p "$OUT" "$OUT/obj_static"
 # src/gui is the Windows GUI front end (its own entry point, and it includes
 # windows.h unconditionally on a hosted build), so it is skipped by path here
 # exactly as run/build_tcc.cmd and run/build_msvc.cmd already do.
-EXE_SOURCES=$(find "$SRC" -name '*.c' -not -path '*/gui/*')
-LIB_SOURCES="$(find "$SRC" -name '*.c' -not -path '*/gui/*' ! -name 'utils_entry.c' ! -name 'main_console.c') $ROOT/lib/die.c"
+EXE_SOURCES=$(find "$SRC" -name '*.c' -not -path '*/gui/*' -not -path '*/tui/*')
+LIB_SOURCES="$(find "$SRC" -name '*.c' -not -path '*/gui/*' -not -path '*/tui/*' ! -name 'utils_entry.c' ! -name 'main_console.c') $ROOT/lib/die.c"
 
 DEF="-DNDEBUG"
 
-echo "[1/3] cdie..."
+echo "[1/3] diec..."
 # shellcheck disable=SC2086
-"$TCC" $DEF -I"$SRC" $EXE_SOURCES -o "$OUT/cdie"
+"$TCC" $DEF -I"$SRC" $EXE_SOURCES -o "$OUT/diec"
 
 echo "[2/3] libdie.so (shared library)..."
 # shellcheck disable=SC2086
@@ -54,4 +59,4 @@ done
 "$TCC" -ar rcs "$OUT/libdie.a" $OBJS
 
 echo
-echo "Built in $OUT/ :  cdie  libdie.so  libdie.a"
+echo "Built in $OUT/ :  diec  libdie.so  libdie.a"

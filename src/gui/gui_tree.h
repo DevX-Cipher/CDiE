@@ -2,6 +2,10 @@
 #ifndef CDIE_GUI_TREE_H
 #define CDIE_GUI_TREE_H
 #include <xxwidgets/xxwidgets_scan_panel.h>
+#include "gui_scan_options.h"
+/* Applies highlighting and all category colors to the current result tree and
+ * subsequent scans, retaining row selection, expansion and signature marks. */
+xxwidgets_status gui_tree_set_scan_preferences(const gui_scan_page_values *values);
 /* Scan and replace the complete tree transactionally. Free type with gui_backend_free.
  *
  * The engine runs on a worker thread while xxwidgets_process_dialog, owned by

@@ -1,7 +1,8 @@
 # Testing
 
 The acceptance criterion for this port is simple: for the same input file and
-the same databases, `cdie` must print exactly what `diec` prints.
+the same databases, this port's `diec` must print exactly what the original
+Qt `diec` prints. Use separate executable paths when comparing them.
 
 ## Reference comparison
 
@@ -57,13 +58,16 @@ subset explicitly; it is not a claim of full output compatibility. The default
 `p,j,x,c,t` comparison intentionally exposes those differences. Run it directly:
 
 ```bash
-python3 tests/test_compatibility.py --cdie build/src/console/cdie \
+python3 tests/test_compatibility.py --cdie build/src/console/diec \
   --reference /absolute/path/to/diec --suite reference
 ```
 
 The GitHub compatibility workflow builds pinned dependencies and runs the
-public regressions on Linux, Windows and macOS. Its Windows job also runs the
-native GUI smoke test, including applying and cancelling expansion controls.
+public regressions on Linux, Windows and macOS. macOS builds only the GUI, so
+its tests exercise backend models and native Cocoa smoke checks without a
+console executable. Linux and Windows also run console regressions. The
+Windows job runs the native GUI smoke test, including applying and cancelling
+expansion controls.
 Large real-world corpus and decoder parity sweeps remain separate work.
 
 ### Private corpus comparison
@@ -72,7 +76,7 @@ For a repeatable comparison of the locally built console versions, use the
 developer harness in `private_tests/compare_console.py`:
 
 ```powershell
-python private_tests/compare_console.py --cdie F:\ownCloud_build\cdie\build\srct\src\console\cdie.exe --diec F:\ownCloud_build\die\build\srct\src\console\diec.exe --database F:\ownCloud\prepare\qt5\_mylibs\Detect-It-Easy\db --corpus F:\out_iso\out_tmp2\PE32 --sample-per-directory 1 --batch-size 8 --timeout 120 --output private_tests/comparison-results
+python private_tests/compare_console.py --cdie F:\ownCloud_build\cdie\build\srct\src\console\diec.exe --diec F:\ownCloud_build\die\build\srct\src\console\diec.exe --database F:\ownCloud\prepare\qt5\_mylibs\Detect-It-Easy\db --corpus F:\out_iso\out_tmp2\PE32 --sample-per-directory 1 --batch-size 8 --timeout 120 --output private_tests/comparison-results
 ```
 
 It uses `-b -d -u` for both tools, selects one file per directory recursively,
@@ -135,14 +139,14 @@ private probe database, fixtures, raw outputs and `summary.json`. The installed
 database remains unchanged. For example:
 
 ```powershell
-python private_tests/verify_pe_metadata_reference.py --diec F:\ownCloud_build\die\build-release\srct\src\console\diec.exe --cdie F:\ownCloud_build\cdie\build-release\srct\src\console\cdie.exe --output private_tests/pe-metadata-oracle
+python private_tests/verify_pe_metadata_reference.py --diec F:\ownCloud_build\die\build-release\srct\src\console\diec.exe --cdie F:\ownCloud_build\cdie\build-release\srct\src\console\diec.exe --output private_tests/pe-metadata-oracle
 ```
 
 ```powershell
 param([string[]]$Files)
 
 $root = "C:\path\to\Detect-It-Easy"
-$cdie = "C:\path\to\cdie.exe"
+$cdie = "C:\path\to\this-port\diec.exe"
 
 $same = 0; $diff = 0
 foreach ($f in $Files) {
@@ -230,7 +234,7 @@ carrying the file type as its `string`. A few kilobytes of random bytes plus
 `--hideunknown` gets you there.
 
 ```bash
-cdie -D db -j -U random.bin
+diec -D db -j -U random.bin
 ```
 
 ```json
@@ -298,7 +302,7 @@ function detect() {
 ```
 
 ```bash
-cdie -D probedb some_assembly.dll
+diec -D probedb some_assembly.dll
 ```
 
 The probe database needs `_init`, `_debug`, `_runtime_helpers`, `language`
@@ -380,11 +384,11 @@ This is how you find the rule responsible when a scan misbehaves on an
 unusual input:
 
 ```bash
-CDIE_TRACE=1 cdie -D db weird.bin 2>&1 | tail -5
+CDIE_TRACE=1 diec -D db weird.bin 2>&1 | tail -5
 ```
 
 ```powershell
-$env:CDIE_TRACE = "1"; cdie.exe -D db weird.bin
+$env:CDIE_TRACE = "1"; diec.exe -D db weird.bin
 ```
 
 ## Robustness
@@ -613,3 +617,34 @@ filter to one of six symbols, closes with Escape and verifies unchanged source
 bytes. Native Windows/Cocoa smoke uses a synthetic symbol because GUI binaries
 may be stripped. Changed Windows GUI, adapter, reader, browser/modal compile with
 MinGW; native desktop runtime/clipboard and Cocoa compilation require those hosts.
+
+
+## Portable packaging and Options persistence
+
+`cdie.settings` checks typed INI Options persistence and malformed-value
+fallback. `cdie.settings_policy` runs from an isolated Unicode installation
+folder with an empty uppercase `PORTABLE` marker and a different working
+directory. It tests every exposed Options value in portable INI and an
+isolated native registry namespace, complementary value profiles, saved
+Defaults, preservation of unrelated keys, unsupported CPU feature masking,
+and a write/verify pair in separate processes. Signature folders are real
+minimal fixture databases. Three explicitly stored empty database paths
+restore the executable-local default folders even after custom folders were
+loaded in the same process.
+
+On Windows, `cdie.windows_settings` drives the actual Options window through
+Scan, Fonts, Hex and Optimization edits. It verifies OK writes `cdie.ini`,
+fresh processes restore every applied value, Cancel leaves the existing INI
+bytes and active values unchanged, and Default followed by OK saves defaults
+that survive another restart. The dedicated GUI smoke mode requires portable
+storage, rejects environment overrides, and omits the Explorer integration
+page so tests never register a shell context menu. File-page integration is
+itself persisted by Windows rather than an INI preference.
+
+`cdie.windows_portable_package` invokes the default CPack generator, checks
+that it produced a ZIP with an empty `PORTABLE` beside the main GUI executable,
+checks bundled signatures when enabled, extracts it, and verifies that the
+real settings opener selects the adjacent INI. It rejects accidentally
+packaged personal `cdie.ini` files. The focused xxfclib `tests/settings` suite
+also checks the public portable-status function, uppercase/lowercase markers,
+invalid paths, working-directory isolation, and typed INI/native save guards.

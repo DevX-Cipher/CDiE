@@ -2,7 +2,7 @@
 rem ---------------------------------------------------------------------------
 rem Build the cdie GUI (pure WinAPI) with MSVC directly (no CMake). Produces:
 rem
-rem   build_msvc\cdie_gui.exe   CRT-free, imports KERNEL32 + the GUI system DLLs
+rem   build_msvc\die.exe   CRT-free, imports KERNEL32 + the GUI system DLLs
 rem
 rem The engine is reused: every .c under src except the console entry points
 rem (utils_entry.c, main_console.c) and src\gui is compiled in, plus the three
@@ -59,7 +59,7 @@ rem --- Engine source list (engine minus entry points and the gui dir) --------
 set "GUI_SOURCES="
 for /r "%SRC%" %%f in (*.c) do (
     set "skip="
-    echo %%~dpf| findstr /i "\\gui\\" >nul && set "skip=1"
+    echo %%~dpf| findstr /i "\\gui\\ \\tui\\" >nul && set "skip=1"
     if /i "%%~nxf"=="utils_entry.c" set "skip=1"
     if /i "%%~nxf"=="main_console.c" set "skip=1"
     if not defined skip set "GUI_SOURCES=!GUI_SOURCES! "%%f""
@@ -73,16 +73,16 @@ echo [1/2] cdie_gui.res (manifest + version)...
 rc /nologo /i "%GUI%" /fo "%OUT%\cdie_gui.res" "%GUI%\cdie_gui.rc"
 if errorlevel 1 ( echo BUILD FAILED ^(cdie_gui.res^) & exit /b 1 )
 
-rem --- 2. cdie_gui.exe (CRT-free, WINDOWS subsystem) ------------------------
-echo [2/2] cdie_gui.exe (CRT-free, WinAPI)...
+rem --- 2. die.exe (CRT-free, WINDOWS subsystem) ------------------------
+echo [2/2] die.exe (CRT-free, WinAPI)...
 if not exist "%OUT%\obj_gui" mkdir "%OUT%\obj_gui"
 cl /nologo /O2 /W3 /GS- /DNDEBUG -DCDIE_NO_CRT -I"%SRC%" ^
-   !GUI_SOURCES! "%OUT%\cdie_gui.res" /Fe:"%OUT%\cdie_gui.exe" /Fo:"%OUT%\obj_gui\\" ^
+   !GUI_SOURCES! "%OUT%\cdie_gui.res" /Fe:"%OUT%\die.exe" /Fo:"%OUT%\obj_gui\\" ^
    /link /NODEFAULTLIB /ENTRY:x_gui_entry_point /SUBSYSTEM:WINDOWS /OPT:REF /OPT:ICF ^
    kernel32.lib user32.lib gdi32.lib comdlg32.lib comctl32.lib shell32.lib ole32.lib
-if errorlevel 1 ( echo BUILD FAILED ^(cdie_gui.exe^) & exit /b 1 )
+if errorlevel 1 ( echo BUILD FAILED ^(die.exe^) & exit /b 1 )
 
 echo.
 echo Built in %OUT%\ :
-echo   cdie_gui.exe
+echo   die.exe
 endlocal

@@ -18,8 +18,30 @@ typedef struct tree_buffer {
     xxwidgets_tree_color *colors;
     char **names, **signatures; /* per node; NULL on group rows */
     unsigned int *marks;
+    xx_scan_color_category *categories;
     size_t count, capacity, detections;
 } tree_buffer;
+
+static gui_scan_page_values g_tree_preferences;
+static int g_tree_preferences_ready;
+
+static xxwidgets_tree_color category_color(xx_scan_color_category category, const gui_scan_page_values *preferences)
+{
+    if (!preferences->highlight || category < XX_SCAN_COLOR_UNKNOWN || category >= XX_SCAN_COLOR_COUNT)
+        return (xxwidgets_tree_color){UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX};
+    xx_scan_color_record light = preferences->colors.records[category], dark = preferences->dark_colors.records[category];
+    return (xxwidgets_tree_color){light.foreground, light.background, dark.foreground, dark.background};
+}
+
+static void tree_preferences_init(void)
+{
+    if (g_tree_preferences_ready) return;
+    memset(&g_tree_preferences, 0, sizeof(g_tree_preferences));
+    g_tree_preferences.highlight = 1;
+    xx_scan_color_options_init(&g_tree_preferences.colors, 0);
+    xx_scan_color_options_init(&g_tree_preferences.dark_colors, 1);
+    g_tree_preferences_ready = 1;
+}
 
 enum { PENDING_NONE = 0, PENDING_MARK, PENDING_SIGNATURES, PENDING_DIRECTORY, PENDING_LOG };
 
@@ -41,7 +63,7 @@ static void free_rows(tree_buffer *rows)
         free((void *)rows->nodes[i].text);
         free(rows->names[i]); free(rows->signatures[i]);
     }
-    free(rows->nodes); free(rows->colors); free(rows->names); free(rows->signatures); free(rows->marks);
+    free(rows->nodes); free(rows->colors); free(rows->names); free(rows->signatures); free(rows->marks); free(rows->categories);
     memset(rows, 0, sizeof(*rows));
 }
 
@@ -50,6 +72,45 @@ static char *copy_text(const char *text)
     char *copy = text ? malloc(strlen(text) + 1) : NULL;
     if (copy) strcpy(copy, text);
     return copy;
+}
+
+xxwidgets_status gui_tree_set_scan_preferences(const gui_scan_page_values *values)
+{
+    xxwidgets_tree_color *colors = NULL;
+    xxwidgets_status status = XXWIDGETS_OK;
+    static const char *const labels[MARK_COUNT] = {"S", "?"};
+    int selected = -1;
+    if (!values || (values->highlight != 0 && values->highlight != 1)) return XXWIDGETS_INVALID_ARGUMENT;
+    for (size_t i = 0; i < XX_SCAN_COLOR_COUNT; ++i) {
+        const xx_scan_color_record records[2] = {values->colors.records[i], values->dark_colors.records[i]};
+        for (size_t j = 0; j < 2; ++j)
+            if ((records[j].foreground > UINT32_C(0xffffff) && records[j].foreground != UINT32_MAX) ||
+                (records[j].background > UINT32_C(0xffffff) && records[j].background != UINT32_MAX)) return XXWIDGETS_INVALID_ARGUMENT;
+    }
+    tree_preferences_init();
+    if (g_marks.tree && g_marks.rows.count) {
+        xxwidgets_widget *tree = (xxwidgets_widget *)g_marks.tree;
+        colors = malloc(g_marks.rows.count * sizeof(*colors));
+        if (!colors) return XXWIDGETS_OUT_OF_MEMORY;
+        (void)xxwidgets_widget_get_value(tree, &selected);
+        for (size_t i = 0; i < g_marks.rows.count; ++i) {
+            colors[i] = category_color(g_marks.rows.categories[i], values);
+            (void)xxwidgets_treeview_get_expanded(tree, i, &g_marks.rows.nodes[i].expanded);
+        }
+        status = xxwidgets_treeview_set_colored_nodes(tree, g_marks.rows.nodes, colors, g_marks.rows.count);
+        if (status == XXWIDGETS_OK) status = xxwidgets_treeview_set_marks(tree, labels, MARK_COUNT, g_marks.rows.marks, g_marks.rows.count);
+        if (status == XXWIDGETS_OK) {
+            memcpy(g_marks.rows.colors, colors, g_marks.rows.count * sizeof(*colors));
+            (void)xxwidgets_widget_set_value(tree, selected);
+        } else {
+            (void)xxwidgets_treeview_set_colored_nodes(tree, g_marks.rows.nodes, g_marks.rows.colors, g_marks.rows.count);
+            (void)xxwidgets_treeview_set_marks(tree, labels, MARK_COUNT, g_marks.rows.marks, g_marks.rows.count);
+            (void)xxwidgets_widget_set_value(tree, selected);
+        }
+        free(colors);
+    }
+    if (status == XXWIDGETS_OK) g_tree_preferences = *values;
+    return status;
 }
 
 /* The worker scans with its own progress object, work. xx_pd_struct has plain
@@ -88,6 +149,7 @@ static int collect_node(size_t parent, const char *text, const char *category, c
             !grow((void **)&buffer->colors, sizeof(*buffer->colors), capacity) ||
             !grow((void **)&buffer->names, sizeof(*buffer->names), capacity) ||
             !grow((void **)&buffer->signatures, sizeof(*buffer->signatures), capacity) ||
+            !grow((void **)&buffer->categories, sizeof(*buffer->categories), capacity) ||
             !grow((void **)&buffer->marks, sizeof(*buffer->marks), capacity)) return 0;
         buffer->capacity = capacity;
     }
@@ -101,7 +163,8 @@ static int collect_node(size_t parent, const char *text, const char *category, c
         return 0;
     }
     buffer->nodes[buffer->count] = (xxwidgets_tree_node){parent, copy, 1};
-    buffer->colors[buffer->count] = xxwidgets_scan_result_color(category);
+    buffer->categories[buffer->count] = category[0] ? xx_scan_type_to_color_category(category) : XX_SCAN_COLOR_COUNT;
+    buffer->colors[buffer->count] = category_color(buffer->categories[buffer->count], &g_tree_preferences);
     buffer->names[buffer->count] = name;
     buffer->signatures[buffer->count] = signature;
     buffer->marks[buffer->count++] = (signature ? 1u << MARK_SIGNATURE : 0) | (name ? 1u << MARK_INFO : 0);
@@ -155,6 +218,7 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
     xx_thread_t *thread;
     long long started = xx_rt_clock_ms();
     int ok;
+    tree_preferences_init();
     if (type) *type = NULL;
     if (cancelled) *cancelled = 0;
     job.path = path; job.type_id = type_id;
@@ -178,8 +242,6 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
         /* The facts and time DIE shows around the tree, and the log behind Log. */
         (void)xxwidgets_scan_panel_set_file_info(panel, job.info.endianness, job.info.mode, job.info.architecture, job.info.type);
         (void)xxwidgets_scan_panel_set_elapsed(panel, xx_rt_clock_ms() - started);
-        free(g_marks.log);
-        g_marks.log = copy_text(job.info.log);
     }
     if (ok && panel) {
         /* Labels as DIE draws them; the rows stay for the button presses. */
@@ -193,6 +255,7 @@ int gui_tree_scan(xxwidgets_widget *owner, xxwidgets_scan_panel *panel, const ch
             g_marks.path = copy;
             g_marks.type_id = type_id;
             g_marks.tree = tree;
+            g_marks.log = copy_text(job.info.log);
         } else free(copy);
     }
     if (ok && type) { *type = job.type; job.type = NULL; }

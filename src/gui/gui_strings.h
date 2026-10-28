@@ -8,6 +8,9 @@
  * map (or NULL) each string gets the region holding it and its address. */
 xxwidgets_status gui_strings_set_data(xxwidgets_strings *view, const cdie_strings_data *data, const cdie_memory_map_data *map);
 xxwidgets_status gui_strings_show(xxwidgets_widget *owner, const char *path);
+/* Interactive stress example: genuinely scan count * 5 virtual input bytes
+ * on the worker with progress, then browse every record through 64-bit pages. */
+xxwidgets_status gui_strings_show_generated(xxwidgets_widget *owner, uint64_t count);
 /* Host callback for the shared modal's accepted Save CSV destination. */
 xxwidgets_status gui_strings_save_csv(const char *path, const char *text, size_t length, void *user);
 #endif

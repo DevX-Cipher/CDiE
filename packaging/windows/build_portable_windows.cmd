@@ -60,7 +60,8 @@ if not defined GEN_IS_VS (
 
 set "WORK_ROOT=%TEMP%\cdie_%PACKAGE_SUFFIX%"
 set "BUILD_DIR=%WORK_ROOT%\build"
-set "APP_NAME=cdie.exe"
+set "APP_NAME=diec.exe"
+set "GUI_NAME=die.exe"
 set "PACKAGE_BASENAME=cdie_%PACKAGE_SUFFIX%_portable"
 
 if not exist "%PROJECT_ROOT%\release_version.txt" (
@@ -91,9 +92,9 @@ if errorlevel 1 exit /b 1
 echo Configuring %PACKAGE_SUFFIX% build...
 if defined DB_ARG (
     echo Signature database: %CDIE_DATABASE_DIR%
-    cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR_NAME%" %GEN_ARGS% "%DB_ARG%"
+    cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR_NAME%" %GEN_ARGS% -DCDIE_BUILD_GUI=ON -DCDIE_BUILD_CONSOLE=ON -DCDIE_BUILD_TUI=OFF "%DB_ARG%"
 ) else (
-    cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR_NAME%" %GEN_ARGS%
+    cmake -S "%PROJECT_ROOT%" -B "%BUILD_DIR%" -G "%CMAKE_GENERATOR_NAME%" %GEN_ARGS% -DCDIE_BUILD_GUI=ON -DCDIE_BUILD_CONSOLE=ON -DCDIE_BUILD_TUI=OFF
 )
 if errorlevel 1 exit /b 1
 
@@ -103,8 +104,10 @@ if errorlevel 1 exit /b 1
 
 if defined GEN_IS_MULTI (
     set "APP_EXE=%BUILD_DIR%\src\console\Release\%APP_NAME%"
+    set "GUI_EXE=%BUILD_DIR%\src\gui\Release\%GUI_NAME%"
 ) else (
     set "APP_EXE=%BUILD_DIR%\src\console\%APP_NAME%"
+    set "GUI_EXE=%BUILD_DIR%\src\gui\%GUI_NAME%"
 )
 set "CPACK_CONFIG=%BUILD_DIR%\CPackConfig.cmake"
 
@@ -120,6 +123,12 @@ if not exist "%CPACK_CONFIG%" (
     exit /b 1
 )
 
+if not exist "%GUI_EXE%" (
+    echo Built GUI executable not found:
+    echo   %GUI_EXE%
+    exit /b 1
+)
+
 if exist "%PACKAGE_DIR%" rmdir /s /q "%PACKAGE_DIR%"
 if exist "%CPACK_DIR%" rmdir /s /q "%CPACK_DIR%"
 if exist "%CPACK_OUTPUT_DIR%" rmdir /s /q "%CPACK_OUTPUT_DIR%"
@@ -127,6 +136,15 @@ if exist "%CPACK_OUTPUT_DIR%" rmdir /s /q "%CPACK_OUTPUT_DIR%"
 echo Installing portable package folder...
 cmake --install "%BUILD_DIR%" --config Release --prefix "%PACKAGE_DIR%"
 if errorlevel 1 exit /b 1
+
+for %%F in (die.exe diec.exe) do if not exist "%PACKAGE_DIR%\%%F" (
+    echo Missing packaged application: %%F
+    exit /b 1
+)
+for %%F in (cdie_gui.exe cdie.exe cdie_tui.exe diex.exe) do if exist "%PACKAGE_DIR%\%%F" (
+    echo Unexpected legacy frontend in package: %%F
+    exit /b 1
+)
 
 rem A package that quietly lost its signatures -- a mistyped or unquoted
 rem CDIE_DATABASE_DIR fails the EXISTS test in CMakeLists.txt and only prints
@@ -140,6 +158,17 @@ if /i not "%CDIE_DATABASE_DIR%"=="NONE" (
         echo or to NONE to package the binary alone.
         exit /b 1
     )
+)
+
+rem Portable storage must be enabled immediately after extraction.
+if not exist "%PACKAGE_DIR%\PORTABLE" (
+    echo Missing portable marker beside the applications:
+    echo   %PACKAGE_DIR%\PORTABLE
+    exit /b 1
+)
+for %%F in ("%PACKAGE_DIR%\PORTABLE") do if not "%%~zF"=="0" (
+    echo Portable marker must be empty.
+    exit /b 1
 )
 
 echo Creating portable zip with CPack...

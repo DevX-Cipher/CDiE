@@ -2,7 +2,7 @@
 rem ---------------------------------------------------------------------------
 rem Build cdie with MSVC directly (no CMake). Produces, under build_msvc\:
 rem
-rem   cdie.exe         the console scanner - CRT-free, imports KERNEL32 only
+rem   diec.exe         the console scanner - CRT-free, imports KERNEL32 only
 rem   die.dll, die.lib the die_library-compatible shared library + import lib
 rem   die_static.lib   the static library (link the whole engine in)
 rem
@@ -56,13 +56,13 @@ rem --- Source lists ----------------------------------------------------------
 rem Console: every .c under src (core, js, format, engine, console).
 rem Library: the same, minus the two entry points, plus lib\die.c.
 rem src\gui is the Windows GUI front end (its own WinMain / entry point and
-rem _fltused/mem* copies): it must NOT go into cdie.exe or the libraries, so it
+rem _fltused/mem* copies): it must NOT go into diec.exe or the libraries, so it
 rem is skipped by path here and built separately by run\build_msvc_gui.cmd.
 set "EXE_SOURCES="
 set "LIB_SOURCES="
 for /r "%SRC%" %%f in (*.c) do (
     set "skip="
-    echo %%~dpf| findstr /i "\\gui\\" >nul && set "skip=1"
+    echo %%~dpf| findstr /i "\\gui\\ \\tui\\" >nul && set "skip=1"
     if not defined skip (
         set "EXE_SOURCES=!EXE_SOURCES! "%%f""
         set "keep=1"
@@ -73,13 +73,13 @@ for /r "%SRC%" %%f in (*.c) do (
 )
 set "LIB_SOURCES=!LIB_SOURCES! "%ROOT%\lib\die.c""
 
-rem --- 1. cdie.exe (CRT-free, KERNEL32 only) ---------------------------------
-echo [1/3] cdie.exe (CRT-free, KERNEL32 only)...
+rem --- 1. diec.exe (CRT-free, KERNEL32 only) ---------------------------------
+echo [1/3] diec.exe (CRT-free, KERNEL32 only)...
 if not exist "%OUT%\obj_exe" mkdir "%OUT%\obj_exe"
 cl /nologo /O2 /W3 /GS- /DNDEBUG -DCDIE_NO_CRT -I"%SRC%" ^
-   !EXE_SOURCES! /Fe:"%OUT%\cdie.exe" /Fo:"%OUT%\obj_exe\\" ^
+   !EXE_SOURCES! /Fe:"%OUT%\diec.exe" /Fo:"%OUT%\obj_exe\\" ^
    /link /NODEFAULTLIB /ENTRY:x_entry_point /SUBSYSTEM:CONSOLE kernel32.lib
-if errorlevel 1 ( echo BUILD FAILED ^(cdie.exe^) & exit /b 1 )
+if errorlevel 1 ( echo BUILD FAILED ^(diec.exe^) & exit /b 1 )
 
 rem --- 2. die_static.lib (static, CRT-free, DIE_STATIC) ----------------------
 echo [2/3] die_static.lib (static library, CRT-free)...
@@ -107,5 +107,5 @@ if errorlevel 1 ( echo BUILD FAILED ^(die.dll^) & exit /b 1 )
 
 echo.
 echo Built in %OUT%\ :
-echo   cdie.exe  die.dll  die.lib  die_static.lib
+echo   diec.exe  die.dll  die.lib  die_static.lib
 endlocal

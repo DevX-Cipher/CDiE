@@ -22,6 +22,10 @@ No Qt or code generators. The scan engine uses the C11 `cdisasm` x86 decoder
 through xxfclib. Both libraries build from source with the scanner, and the
 decoder adds no runtime library dependency.
 
+The focused scan engine registers TAR as its only archive writer, preserving
+`--createtar` and `--createprecompiledtar` for signature databases. Reading and
+decompression of other supported archive formats remain enabled.
+
 On Windows it goes one step further: the runtime layer is Win32 only, and the
 native MSVC x64 and ARM64 builds link no C runtime at all. The current Release
 console executable imports **50 functions on x64 and 51 on ARM64, all from
@@ -43,122 +47,50 @@ rechecked with the `cdisasm` backend. See [docs/TESTING.md](docs/TESTING.md).
 
 The console exposes the shared engine's additional scan passes:
 
-```bash
-cdie --alltypes --overlayscan --resourcesscan --archivesscan -j sample.exe
-```
+- `-a` / `--alltypes` scans applicable parent file types.
+- `--overlayscan` scans trailing overlays.
+- `--resourcesscan` scans PE/ELF resource payloads.
+- `--archivesscan` scans supported archive members at one level.
 
-`-a` / `--alltypes` adds applicable parent-format passes, such as MSDOS for a
-PE executable. `--overlayscan` scans trailing overlays, `--resourcesscan`
-scans PE/ELF resource payloads, and `--archivesscan` scans supported decoded
-archive members and Mach-O Fat slices. Archive expansion covers ZIP-family
-containers, LHA, GZIP and BZIP2; it visits one level. `-r` still controls
-directory traversal independently. The console leaves all four modes off
-unless requested, preserving its default output.
+Archive scanning includes ZIP-family, LHA, GZIP and BZIP2 members plus Mach-O
+Fat slices. Nested recursion and RAR/CAB member expansion are not exposed by
+this scan path. Directory traversal remains controlled by `-r` /
+`--recursivescan`. See [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
-On Windows and macOS, **Scan options** contains the same four controls. The
-TUI exposes them with **F2**. Interactive frontends initially enable overlays;
-the other expansion modes start off. OK applies changes to the next scan;
-Cancel preserves them. The result tree and Report use the same scan results.
+## File Information
 
-Public generated-fixture tests and an optional strict `diec` comparison are
-documented in [docs/TESTING.md](docs/TESTING.md#public-compatibility-tests).
+`diec --info FILE` (`-i`) reports native file information without a signature
+database. `--showstructs` (`-w`) lists available native structures, while
+`--struct` (`-S`) selects a structure. The native PE, ELF and thin Mach-O readers
+supply DataStructs; unsupported file formats are rejected.
 
-## File information
-
-File Information structure commands use native **DataStructs for PE, ELF and thin Mach-O
-only**. A signature database is not required.
-
-The Windows and macOS GUIs provide a **File Information** button for the current
-file path. Windows also supports **Ctrl+I**; macOS provides **File → File
-Information** with **Cmd+I**. The reusable `xxwidgets_file_information_*` view
-shows structures on the left and typed fields on the right, including raw and
-display values, relative/file offsets, sizes, roles and comments. Raw ranges
-show their metadata. Close or Escape returns to the scan window without
-changing its results. Loading runs on a worker with cancellable progress.
-
-```bash
-cdie --info program.exe
-cdie --showstructs
-cdie --showstructs --json program.exe
-cdie --struct "PE::IMAGE_DOS_HEADER#e_lfanew" --json program.exe
-cdie -S "ELF::elf_header64" -j program.elf
-cdie -S "MACHO::mach_header_64" -j program.macho
-```
-
-`-i` / `--info` dumps native structures and their fields. `-S` / `--struct`
-selects a native structure name, optionally qualified with `PE::`, `ELF::` or
-`MACHO::`; `#FIELD` selects a named field. Names are case-sensitive. `Info` is
-an alias for the complete dump, and `-S` takes precedence when combined with
-`-i`. `-w` / `--showstructs` lists structures present in a target; without a
-target it lists the supported native catalog.
-
-JSON, XML, CSV, TSV and plaintext are supported. Structure offsets are absolute
-file offsets; field offsets are relative to their structure. Inventory retains
-native table counts, while full information expands fixed-size table entries
-into separate occurrences. Raw descriptors such as DOS stubs and padding retain
-their ranges and have no fabricated fields. Repeated names remain separate
-records. This native DataStructs output has its own schema and is not a
-byte-for-byte reproduction of Qt's XFileInfo report.
-
-Directory targets support `-r`. Multi-file JSON/XML stays one document, and
-CSV/TSV includes a path column and one header. Unsupported formats, malformed
-inputs, unknown or absent structures and missing fields return an error without
-printing a partial file report. File information and database operations are
-separate command modes; structure inventory cannot be combined with a dump.
+The native GUIs provide **File Information** through the shared
+`xxwidgets_file_information_dialog`. A cancellable worker builds a bounded
+presentation model, then the browser displays navigation and structure fields.
+Read failures and cancellation discard partial models. Closing restores the
+scan window. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the native
+DataStructs adapter and ownership rules.
 
 ## Entropy
 
-`cdie --entropy FILE` (`-e`) calculates Shannon entropy in bits per byte,
-without a signature database. Use `-j`, `-x`, `-c`, `-t` or `-p` for JSON,
-XML, CSV, TSV or plaintext. Directory targets and `-r` work as with scans;
-multi-file JSON/XML uses a `files` wrapper. Entropy is a separate command mode
-and cannot be combined with File Information, inventory or database operations.
+`diec --entropy FILE` (`-e`) calculates entropy without a signature database.
+It reads checked 64 KiB chunks and combines 64-bit byte histograms into the
+whole-file total. Native memory maps supply physical regions without using
+DataStructs. Empty files are valid. The report retains at most 1024 regions,
+100 samples and one 256-bin histogram; failures and cancellation discard
+incomplete results.
 
-```bash
-cdie -e program.exe
-cdie --entropy --json program.elf
-cdie -rej samples/
-```
-
-The report includes the whole-file total, physical region offsets/sizes,
-entropy and a `packed` / `not packed` status (threshold 6.5). PE headers,
-sections and overlays, ELF segments and Mach-O segments come from native memory
-maps. Other files use one `Data` region. Virtual-only ranges are excluded and
-physical ranges are clipped to the file. Non-ASCII/control bytes in region
-names are displayed as byte escapes. Empty files have entropy zero.
-
-Both native GUIs have an **Entropy** button; Windows supports **Ctrl+E** and
-macOS provides **File → Entropy** with **Cmd+E**. A cancellable worker streams
-the analysis, then `xxwidgets_entropy_dialog` shows totals, regions, a byte
-histogram and an entropy curve. The region filter, map selector, grid and
-sample tracking reuse the existing `xxwidgets_entropy_*` controls. The graph
-uses up to 100 automatic blocks, with the final block including the remainder.
-Count/Reload are disabled for these precomputed results. Widgets copy only
-statistics and keep no source-file bytes.
+The native GUIs provide **Entropy** on a cancellable worker and present the
+completed result through the shared xxwidgets entropy tables, graph and byte
+histogram. Parser and file I/O stay outside the widget. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Hash
 
-`cdie --hash FILE` or `cdie -S Hash FILE` computes whole-file **CRC32, MD5,
-SHA1 and SHA256** using the native xxfclib streaming contexts. Hashing works
-for every file type and requires no signature database. `-h` remains Help.
-
-```bash
-cdie --hash program.exe
-cdie -S Hash --json program.elf
-cdie -S "Hash#SHA256" --json file.bin
-cdie --hash -rj samples/
-```
-
-`Hash#CRC32`, `Hash#MD5`, `Hash#SHA1` and `Hash#SHA256` select a single output
-field; names are case-sensitive. Hash selection is a byte operation and does
-not use DataStructs. Hash, Entropy, File Information, structure inventory and
-database operations are separate modes. Unsupported algorithms return an
-error rather than an empty value. MD4, SHA224, SHA384 and SHA512 are currently
-unavailable in this command.
-
-Text/plaintext, JSON, XML, CSV and TSV are supported. JSON uses
-`{"data":{"Hash":{"MD5":"...",...}}}`; XML uses `<data>` with nested Hash
-and algorithm records. CSV/TSV begins with a `Hash` row followed by
+`diec --hash FILE` (also `-S Hash`) calculates CRC32, MD5, SHA1 and SHA256
+without loading a signature database or file parser. Every checked 64 KiB read
+feeds all four digest contexts in one pass. Reports support plain text, JSON,
+XML, CSV and TSV. Plain output prints
 algorithm/value rows. Multiple file results use the existing JSON/XML `files`
 wrapper; delimited output repeats the Hash block for each file. All digests
 are lowercase hexadecimal. CRC32 is the ISO-HDLC/ZIP checksum with 8 digits.
@@ -174,16 +106,16 @@ copies algorithm/value lines. Close or Escape returns to the scan window.
 
 ## Strings
 
-`cdie --strings FILE` (also `-S Strings`) extracts string candidates from any
+`diec --strings FILE` (also `-S Strings`) extracts string candidates from any
 file type without a signature database or DataStructs. The default minimum is
 **4 decoded characters**, with ASCII/UTF-8 and automatic UTF-16LE/BE scanning.
 `-s` continues to mean database information.
 
 ```bash
-cdie --strings program.exe
-cdie --strings --strings-min 8 --strings-encoding ascii -j file.bin
-cdie -S Strings --strings-encoding utf16le -j file.bin
-cdie --strings -rj samples/
+diec --strings program.exe
+diec --strings --strings-min 8 --strings-encoding ascii -j file.bin
+diec -S Strings --strings-encoding utf16le -j file.bin
+diec --strings -rj samples/
 ```
 
 `--strings-min` accepts 1–1024; `--strings-encoding` accepts `ascii`, `utf8`,
@@ -206,19 +138,49 @@ across multiple files. Recursive targets use `-r`; multi-file JSON/XML uses
 the usual `files` wrapper. DIE 3.21 has no matching Strings command/schema.
 
 The native GUIs provide **Strings**, with **Ctrl+Shift+S** on Windows and
-**File → Strings / Cmd+Shift+S** on macOS. Loading runs on a cancellable worker
-using the default extraction settings. The shared `xxwidgets_strings_dialog`
-reuses its offset/size/encoding table, filter, selection and Copy controls.
-**View** or Enter opens full decoded text; **Save CSV** exports visible rows
-after choosing a native destination. The host writes the CSV outside input
-dispatch. Save is hidden when no native chooser is available. Close/Escape
-restores the scan window; closing View first returns to the Strings browser.
+**File → Strings / Cmd+Shift+S** on macOS. Extraction and indexing run on a
+cancellable worker. The shared `xxwidgets_strings_source_dialog` displays at
+most 128 records at once, with **Previous**, **Next** and a 64-bit page field.
+Enter text or column filters and click **Search** (or Ctrl+F) to search the
+complete source on a worker with a progress dialog. Cancelling a search keeps
+the preceding results and page. **Save CSV** streams every filtered record on
+a worker after choosing a native destination. Close/Escape restores the scan
+window.
 
-Extraction reads in 64 KiB chunks and retains at most 10,000 results, 8 MiB of
-UTF-8 text and 1 MiB per decoded string. Console reports are capped at 32 MiB.
-A limit, read error or cancellation fails the file operation without exposing
-partial results. Empty files produce an empty list. Strings, Hash, Entropy,
-File Information and database operations are separate command modes.
+GUI results use a temporary 32-byte metadata record per string, sorted by
+physical offset and encoding through a bounded-memory merge. Index creation
+can temporarily require twice that disk space; temporary indexes are removed
+when the browser closes. Only the visible page is decoded. Text longer than
+4 KiB is explicitly marked `[display prefix]` in the browser and its View/Copy
+controls; searching and CSV export still process complete decoded text.
+
+The reusable `xxfclib/strings/xx_strings_scan.h` scanner reads 64 KiB chunks,
+reports 64-bit counts, and sends borrowed metadata/text to callbacks without
+retaining a result array. It includes an SSE2 ASCII classifier and a portable
+scalar path. The console report retains its explicit limits: 10,000 results,
+8 MiB total UTF-8 text, 1 MiB per decoded string and 32 MiB report output. A
+limit, read error or cancellation fails that report without exposing partial
+results. Empty files produce an empty list. Strings, Hash, Entropy, File
+Information and database operations are separate command modes.
+
+With tests enabled, build `bench_strings_billion` and `cdie_strings_billion`
+for reproducible stress examples:
+
+```text
+bench_strings_billion --text
+bench_strings_billion --text --scalar
+cdie_strings_billion
+cdie_strings_billion --gui
+```
+
+The default generated input contains exactly 1,000,000,000 four-character
+ASCII strings separated by NUL (5,000,000,000 bytes). Every byte passes through
+the scanner and every callback is verified; `--text` additionally checks each
+decoded string. Neither example allocates a billion-row array or stores a 5 GB
+input file. The GUI example uses the known generated pattern for lazy pages,
+then performs actual full scans for searches and supports cancellation. Use
+`--count N` for smaller runs. This measures generated input and scanning; real
+files also incur storage I/O and metadata-index costs.
 
 ## Hex View
 
@@ -234,18 +196,13 @@ The new reusable `xxwidgets_hexview_browser_*` adds:
   focuses the field; Enter loads the position. EOF is a valid empty window.
 - **Previous / Next** to move between 64 KiB window boundaries.
 - **Refresh / F5** to reload the displayed bytes, including file size changes.
-- ASCII, UTF-8, UTF-16LE and UTF-16BE display, with 8/16/24/32/48/64-byte rows.
-- **Copy hex / Copy text**, existing context actions and streamed **Save
-  selection** through the shared native destination chooser.
-- **Close / Escape** to return to the scan window.
 
-The viewer retains only a 64 KiB window, supports physical offsets beyond
-4 GiB, and defers toolbar I/O/copy/export until after input dispatch. Invalid
-offsets and failed reads preserve the preceding bytes. Clipboard byte/text
-copies are limited to a 1 MiB selection; copying an offset needs no byte read.
-Save selection can export larger ranges in chunks. The input device is opened
-`rb`; editing, insertion and deletion are unavailable. There is no new console
-command in this change.
+Keyboard and context-menu copies support selected bytes, offsets and decoded
+symbols. Copies of source bytes are bounded to 1 MiB; offset-only copies are
+exempt. The shared byte-dump dialog streams selected ranges. Reads preserve the
+source cursor and failed reads retain the preceding window. Refresh reloads
+the file size and clamps a shrunken file's current position to EOF. The borrowed
+file device stays open until the browser closes.
 
 ## Disasm
 
@@ -263,6 +220,9 @@ and modal.
   byte orders. Big-endian ARM files require manual selection because container
   endianness alone does not determine instruction endianness. ARM modes are
   enabled by default; build with `-DCDIE_DISASM_ARM=OFF` for x86 only.
+- Normal builds use cdisasm's base instruction profile with MIPS and extra
+  opcodes disabled. Optional x86, modern ARM and Apple-specific extensions are
+  excluded. The private compatibility corpus uses a separate extended profile.
 - **Go** accepts decimal or `0x` hexadecimal physical file offsets, including
   EOF. **Ctrl+G/Cmd+G** focuses that field. Addresses in the table use virtual
   addresses where mapped, with the physical offset shown in each row's comment.
@@ -275,184 +235,142 @@ Pages contain at most 512 rows whose starts lie in a 4 KiB range, with 15 bytes
 of lookahead to complete the last instruction. Invalid, unsupported or truncated
 instructions become single-byte `db` rows. Opening metadata runs on a cancellable
 worker; bounded page reads are deferred until after input dispatch. Invalid
-offsets and failed reads preserve the preceding page. Reopen the viewer to
-redetect headers after a file changes. This is linear disassembly; symbols,
-control-flow analysis, execution and editing are outside its current scope.
+navigation or mode changes retain the preceding page and selector.
+
+## Extractor
+
+The native **Extractor** tool (`Ctrl+Shift+T`, or **File → Extractor** on
+macOS) uses `xxfclib/src/extractor` through the shared
+`xxwidgets_extractor_dialog`. Heuristic chooses structured resources or
+archive members when available; Format handles PE resources and ZIP/TAR/PDF
+streams, and Raw finds validated embedded formats. **Deep scan** also searches
+inside discovered objects. Type selection and nine column filters apply to
+the complete result index; the table pages at 128 rows and selection follows
+the corresponding offset in the read-only hex preview.
+
+Scans, table saves, and dumps run on cancellable workers. **Dump selected**
+and **Dump all** copy the source bytes identified by Offset and Size, including
+compressed bytes for compressed members. Output filenames are flattened and
+made unique, and each file is published atomically after a successful write.
+The core API also supports decoded member extraction with a size limit.
+Raw carving validates candidates with native readers. It retains the complete
+signed PE extent and rejects malformed streams that Qt may list as Binary.
+
+Disk writes use the shared `xxwidgets_disk_write_run` dialog: destination,
+current file, completed files and bytes, speed, elapsed time and remaining
+time. It appears after 350 ms and joins the worker before returning. Extractor,
+Strings, Memory Map, Hex View and the signature editor share this dialog.
+Cancel is checked before atomic publication, preserving an existing destination;
+a completed commit remains successful if cancellation arrives afterward.
 
 ## Memory Map
 
-The Windows and macOS GUIs provide **Memory Map** for the current file path,
-with **Ctrl+M** on Windows and **File → Memory Map / Cmd+Shift+M** on macOS.
-It uses the native default map: sections for PE, segments for ELF and thin
-Mach-O. Other inputs, including Mach-O Fat, use one unmapped physical Data
-region; empty raw files have no regions. No signature database or DataStructs
-is required, and the input is opened read-only.
+Memory Map uses `app/cdie_memory_map.c` to read native PE sections or ELF/thin
+Mach-O segments into a detached snapshot. It retains physical, virtual-only,
+invisible and overlapping records in native order, checks physical bounds and
+address overflow, and rejects maps over 1024 rows. Generic inputs receive an
+unmapped Data interval. Readers and the read-only device are destroyed before
+the snapshot returns; it contains no borrowed format/map pointers. DataStructs
+and the signature engine are not used.
 
-The reusable `xxwidgets_memory_map_*` browser and modal expand the existing
-shared tabular controls with **File offset, Address, Size, Type, Name and
-Attributes** columns. Metadata includes the file size, map mode, image base and
-entry address. Unknown addresses and virtual-only file offsets display `-`.
-Headers, overlays, virtual-only tails and invisible records are retained;
-attributes describe physical/virtual/invisible status, not access permissions.
-Unusual name bytes are escaped as `\xNN`.
-
-**Find** accepts decimal or `0x` hexadecimal values. **File offset** selects the
-first physical region containing the value; Enter performs the same lookup.
-**Address** includes virtual-only regions. Ranges are half-open, and the first
-record wins on overlap. Invalid/unmatched values preserve selection.
-**Ctrl+G/Cmd+G** focuses the lookup field. **Copy row / Copy all** produces
-tab-separated text with escaped single-line cells, and **Close / Escape**
-returns to the scanner.
-
-Loading runs on a cancellable worker and publishes an owned metadata snapshot
-of at most 1024 records. Invalid ranges, cancellation and excessive record
-counts produce no partial model. The browser copies its input and owns no
-device or parser. Reopen it to reflect changed file headers. Alternate mapping
-modes, process-memory maps and access permissions are outside this release.
+`gui/gui_memory_map.c` loads that snapshot on the established cancellable worker,
+escapes executable name bytes and translates native part flags into labels.
+`xxwidgets_memory_map_*` copies it into a new MEMORY_MAP table, reusing the
+transactional debugger-table storage, cell escaping and shared native/TUI
+tabular rendering. It adds metadata, region details, physical/address lookup
+and deferred clipboard actions. Virtual-only rows never acquire a physical
+offset. Model/metadata replacement rolls back together; lookups use native
+record order with half-open intervals. The modal restores owner state on exit.
 
 ## Imports
 
-The Windows and macOS GUIs provide **Imports** for the current file path,
-with **Ctrl+Shift+I** on Windows and **File → Imports / Cmd+Shift+I** on macOS.
-Loading uses native PE, ELF and thin Mach-O readers on a cancellable worker,
-with a read-only file device and no signature database or DataStructs.
+Imports uses `app/cdie_imports.c` to collect a detached snapshot of native
+`xx_import_record` values. PE uses its StreamImport cursor for normal/delay
+tables; ELF uses its native symbol cursor and limits executable/shared-object
+records to DYNSYM, accepting named undefined global/weak symbols. Relocatable
+objects can use SYMTAB. Mach-O uses native inspection's undefined external nlist
+symbols and resolves ordinary dylib ordinals to library basenames. Unknown
+slot offsets/addresses stay unknown. The focused build enables import/symbol
+streams; DataStructs remain restricted to the previous three reader families.
 
-- **PE** shows normal and delay-load imports by name or ordinal, including
-  hints and the physical offset/virtual address of each IAT slot.
-- **ELF** shows named undefined global/weak symbols from dynamic symbol tables,
-  or symbol tables in relocatable objects. Library and slot locations remain
-  unknown because that symbol metadata does not identify them.
-- **Mach-O** shows undefined external nlist symbols, with the dylib basename
-  when its library ordinal identifies one. Common, local, debug and defined
-  symbols are excluded. Slot locations remain unknown.
+Names are copied through a bounded byte-escaping adapter; the snapshot owns all
+records/strings and no reader/device pointer. The `cdie_imports_free` destructor
+releases partial state on errors and complete snapshots after GUI use. Limits
+apply before publication. `gui/gui_imports.c` uses the existing worker/progress
+pattern and passes a completed snapshot to `xxwidgets_imports_*`.
 
-The expanded `xxwidgets_imports_*` browser and modal reuse the existing
-`XXWIDGET_IMPORTSVIEWER` table with **Library, Name, Ordinal, Address and Kind**
-columns. Selection details add the file offset and hint (meaningful for named
-PE imports). Unknown addresses/offsets display `-`.
-
-**Filter** matches substrings in library or symbol names, ignoring ASCII case;
-**Reset** restores all rows. **Ctrl+F/Cmd+F** focuses Filter. **Copy row** and
-**Copy visible** export complete selected/filtered rows as tab-separated text,
-including hint and file offset. **Close / Escape** returns to the scanner.
-
-The owned snapshot retains at most 10,000 imports, 16 KiB per displayed name
-and 8 MiB of aggregate names. Control/non-ASCII executable name bytes display
-as `\xNN`; no name is silently truncated. Malformed tables, cancellation and
-exceeded bounds return no partial result. Supported files without imports show
-an empty table. Other formats and Mach-O Fat containers report unsupported.
-Reopen the viewer after a file changes. ELF sectionless dynamic tables and
-Mach-O dyld bind/chained-fixup imports are outside the current symbol-based view.
+The reusable imports browser wraps `XXWIDGET_IMPORTSVIEWER` and its copied native
+table cells. It owns full source records for filtering and a separate copied
+visible table, swapping metadata/filter/buttons/table transactionally. Filter
+and clipboard work is queued after polling. Text export includes complete
+escaped cells, physical offsets and hints, independently of clipped display
+columns. The modal adds resize handling, Close/Esc and Ctrl/Meta+F, restoring
+the owner's callbacks/default/enabled state. It links no native parser.
 
 ## Exports
 
-The Windows and macOS GUIs provide **Exports** for the current file path,
-with **Ctrl+Shift+E** on Windows and **File → Exports / Cmd+Shift+E** on macOS.
-It loads native PE, ELF and thin Mach-O metadata on a cancellable worker,
-using a read-only device without a signature database or DataStructs.
+Exports uses `app/cdie_exports.c` for a detached `xx_export_record` snapshot.
+The focused build enables StreamExport for PE; the native cursor preserves
+ordinals, forwarders and slot order, skipping empty slots and choosing the
+first name for aliased slots. ELF uses the native symbol cursor, retains
+defined global/weak symbols in the applicable symbol tables, and reads the
+validated st_other byte for default/protected visibility. Absolute ELF values
+are normalized to unknown physical offsets. Mach-O's native inspector provides
+exported nlist/trie metadata, aliases, reexports and absolute addresses; regular
+addresses are translated through physical segments when possible.
 
-- **PE** shows named, ordinal-only and forwarded exports in function-slot
-  order. Empty address-table slots are skipped. If several names alias one
-  slot, the native reader returns its first name. A forwarder's displayed
-  location identifies its forwarder string.
-- **ELF** shows named, defined global/weak symbols with default or protected
-  visibility, from DYNSYM or from SYMTAB in relocatable objects. File, section,
-  local, undefined, hidden and internal symbols are excluded. Absolute symbols
-  have a value/address and no physical offset.
-- **Mach-O** shows exports from nlist symbols and native export tries,
-  including indirect aliases, reexports and absolute values. When a trie is
-  present, its public export list determines which symbols are exported.
-
-The reusable `xxwidgets_exports_*` browser and modal expand the existing
-`XXWIDGET_EXPORTSVIEWER` with **Name, Ordinal, Address and Forwarder** columns,
-file metadata and selection details including physical offset. Unknown offsets,
-addresses and non-applicable ordinals display `-`.
-
-**Filter** matches substrings in name or forwarder with ASCII case folding;
-**Reset** restores all rows. **Ctrl+F/Cmd+F** focuses Filter. **Copy row** and
-**Copy visible** produce full tab-separated values including physical offsets.
-**Close / Escape** returns to scanning. Filtering and clipboard work are deferred
-until after input dispatch; replacement failures retain the previous snapshot.
-
-Limits are 10,000 records, 16 KiB per displayed name/forwarder and 8 MiB of
-aggregate NUL-inclusive text. Control/non-ASCII executable name bytes display
-as `\xNN`. Failed, cancelled or over-limit reads expose no partial result.
-Supported files without exports show an empty table; other inputs and Mach-O
-Fat report unsupported. Reopen after file changes. ELF sectionless dynamic
-tables and symbol version metadata are outside this release.
+Name/forwarder byte escaping, limits, cancellation and ownership follow the
+Imports snapshot pattern. ELF/Mach-O ordinals use UINT64_MAX for unknown.
+`gui/gui_exports.c` publishes the completed worker result to the reusable
+`xxwidgets_exports_*` browser/modal. This composes the existing EXPORTSVIEWER
+table, whose ordinal cell now supports the unknown sentinel, with copied
+metadata, name/forwarder filtering, details and deferred TSV copying. The
+browser owns source and visible records; native devices/readers are closed
+before UI presentation and no DataStructs are requested.
 
 ## Resources
 
-The Windows and macOS GUIs provide **Resources** for the current file path,
-with **Ctrl+Shift+U** on Windows and **File → Resources / Cmd+Shift+U** on macOS.
-It loads native PE resources and ELF GResource metadata on a cancellable worker,
-using a read-only device without a signature database or DataStructs.
+Resources uses `app/cdie_resources.c` to collect a detached native
+`xx_resource_record` snapshot through StreamResources for PE or ELF. The focused
+build already includes both providers for resource scanning. PE streams resource
+leaves with numeric/named type, name and language IDs, code pages and ranges;
+ELF provides recognized GResource bundles and supported leaves. No reader,
+device, cursor or payload is retained after loading.
 
-PE records preserve numeric or named type/name/language identifiers, code pages
-and physical byte ranges, including empty resources. ELF enumerates recognized
-`.gresource.*` bundles and their supported value leaves. Bundle rows describe
-the complete stored bundle; leaf rows describe stored data bytes. Compressed
-GResource leaves retain compressed offsets/sizes. Their bytes are not decoded.
+The adapter validates complete physical ranges and caps records/text before
+publication. Valid UTF-8 names are preserved; invalid UTF-8/control bytes escape
+individually, retaining PE Unicode names without trusting arbitrary GResource
+key bytes. Empty resources can have an unknown offset. Cursor failures and
+cancellation discard the complete snapshot. ELF's native provider can skip
+unsupported values/invalid leaf-name graphs while retaining a bundle record.
 
-The reusable `xxwidgets_resources_*` browser and modal expand the existing
-`XXWIDGET_RESOURCESVIEWER` table with **Type, Name, Language, Size and Offset**
-columns, copied file metadata, visible/total counts and selection details
-including all three numeric IDs and the code page. Unknown values display `-`.
-Valid UTF-8 names, including PE Unicode names, are retained; control/invalid
-UTF-8 bytes display as `\xNN`.
-
-**Filter** matches type, name or language text, using decimal IDs when names
-are absent and ignoring ASCII case. **Reset** restores all rows, and
-**Ctrl+F/Cmd+F** focuses Filter. **Copy row / Copy visible** produces complete
-tab-separated metadata, including IDs and code pages. **Close / Escape**
-returns to scanning. The viewer provides read-only metadata browsing; payload
-preview, extraction and editing are outside this release.
-
-Snapshots are limited to 10,000 records, 16 KiB per displayed name and 8 MiB
-of aggregate NUL-inclusive text. Failed, cancelled and over-limit loads expose
-no partial model. Supported PE/ELF files without resources show an empty table;
-other formats, including Mach-O, report unsupported. Native GResource parsing
-can omit unsupported values or invalid leaf names while retaining the bundle
-row. Reopen after file changes.
+`gui/gui_resources.c` follows the shared worker/progress pattern and passes the
+completed snapshot to `xxwidgets_resources_*`. The browser composes the existing
+RESOURCESVIEWER with copied metadata, source/visible counts, type/name/language
+filtering, numeric-ID/code-page details and deferred TSV copying. It owns no
+parser/device and performs no I/O. Source and visible rows are separate owned
+copies; metadata/filter/buttons/table replacement is transactional. The modal
+adds resize handling, Close/Esc and Ctrl/Meta+F and restores the owner on exit.
 
 ## Symbols
 
-The Windows and macOS GUIs provide **Symbols** for the current file path,
-with **Ctrl+Shift+Y** on Windows and **File → Symbols / Cmd+Shift+Y** on macOS.
-It loads native PE, ELF and thin Mach-O symbols on a cancellable worker using a
-read-only device, without a signature database or DataStructs.
+Symbols uses `app/cdie_symbols.c` for a detached `xx_symbol_record` snapshot.
+PE and ELF use native StreamSymbols cursors; PE returns primary COFF entries
+with auxiliary metadata, and ELF traverses native symbol tables. Mach-O's
+native inspector supplies nlist entries plus trie-only exports. The adapter
+preserves native values, table/record locations, type, binding, section,
+auxiliary count and status flags; it maps Mach-O target addresses to physical
+segments when possible. Absolute/debug targets are not treated as file offsets.
+Trie-only entries use unknown table index/record offset.
 
-- **PE** enumerates COFF primary symbols, preserving table indices, native
-  types/storage classes, section numbers and auxiliary counts. File auxiliary
-  records provide their source filename; function/section auxiliary sizes are
-  shown when available.
-- **ELF** enumerates native symbol tables, including local, global, weak,
-  undefined, hidden and absolute symbols. Symbols from different tables remain
-  separate; their record offsets distinguish them.
-- **Mach-O** shows native nlist symbols and trie-only export symbols, preserving
-  native values, section/type/description fields and debug/undefined status.
-  Trie-only symbols have no nlist index or record offset.
-
-The reusable `xxwidgets_symbols_*` browser and modal expand the existing
-`XXWIDGET_SYMBOLSVIEWER` table with **Name, Value, Size, Type and Binding**
-columns, file metadata and selection details. Details show target address,
-physical offset, symbol-record offset, table index, section and status flags.
-Values follow native symbol conventions; unknown offsets and addresses display
-`-`. Size zero can mean unavailable, and absolute values have no file offset.
-
-**Filter** matches name or source filename with ASCII case folding; **Reset**
-restores all rows. **Ctrl+F/Cmd+F** focuses Filter. **Copy row / Copy visible**
-produces complete tab-separated metadata, including fields outside the table.
-**Close / Escape** returns to scanning. Filtering and clipboard work run after
-input dispatch. Valid UTF-8 names are retained; control and invalid UTF-8 bytes
-display as `\xNN`.
-
-Snapshots are limited to 10,000 records, 16 KiB per displayed name and 8 MiB
-of aggregate NUL-inclusive names. Failed, cancelled and over-limit loads expose
-no partial model. Supported files without symbols show an empty table; raw files
-and Mach-O Fat report unsupported. Reopen after file changes. Separate debug
-files, DWARF/PDB decoding and ELF sectionless dynamic tables are outside this
-release.
+Names and source filenames use bounded UTF-8 validation/escaping, with all
+snapshot strings owned independently of cursors. Bounds, cancellation and
+native errors discard the partial model. `gui/gui_symbols.c` publishes a
+completed worker result to the reusable `xxwidgets_symbols_*` browser/modal.
+It composes SYMBOLSVIEWER with copied metadata, name/filename filtering,
+selection details and deferred TSV copying. Full typed fields are exported
+even when table columns are clipped; the widget performs no file I/O and
+retains no parser/device. No DataStructs are requested.
 
 ## Quick start
 
@@ -467,18 +385,18 @@ cmake -S cdie_source -B cdie_build -DCMAKE_BUILD_TYPE=Release
 cmake --build cdie_build
 ```
 
-A portable Windows package contains the executable, database, docs, and
-decoder license notices:
+A portable Windows package contains `die.exe`, `diec.exe`, an empty `PORTABLE`
+marker beside them, the database, docs, and decoder license notices:
 
 ```bat
 packaging\windows\build_portable_windows.cmd x64 win64_msvc2022
 ```
 
 ```bash
-cdie -D /path/to/Detect-It-Easy/db /path/to/target.exe
+diec -D /path/to/Detect-It-Easy/db /path/to/target.exe
 ```
 
-Example, matching `diec` byte for byte:
+Example, matching the original Qt `diec` byte for byte:
 
 ```text
 PE64
@@ -489,52 +407,18 @@ PE64
     Debug data: Records[CodeView, VC Feature, POGO]
 ```
 
-## Terminal interface
+## Frontends
 
-The `cdie_tui` target builds an interactive terminal scanner using `xxwidgets`
-and the same scan engine, options and colored result tree as the native GUI:
+Windows and Linux builds provide the native GUI `die` and the console scanner
+`diec` (`die.exe` and `diec.exe` on Windows). macOS builds provide only the
+`die.app` GUI. The TUI application is disabled on every platform.
 
-```bash
-cmake --build cdie_build --target cdie_tui --parallel
-cdie_build/src/tui/cdie_tui /path/to/target
-```
-
-Use the file-path field and Scan control to scan another file, or Report to
-view the complete output. Enter or F5 scans the path; Tab moves between controls.
-Ctrl+O focuses the path field, Ctrl+R opens the full report, F1 displays keyboard
-help, and Ctrl+Q exits. Scans run on a worker thread with progress and cancellation.
-
-Run it in an interactive terminal; `--help` shows its options and shortcuts.
-`-D`, `-E`, and `-C` select the main, extra, and custom signature directories.
-Signature databases selected by `CDIE_DATABASE_DIR` are copied beside the console
-and TUI executables during linking. Without explicit paths, databases are resolved
-beside the executable or in the working directory.
-
-`CDIE_BUILD_CONSOLE`, `CDIE_BUILD_TUI`, and `CDIE_BUILD_GUI` select frontends.
-Console and TUI default to enabled; the GUI defaults to enabled on macOS and
-Windows. See [docs/BUILDING.md](docs/BUILDING.md#terminal-interface) for details.
-
-## Linux GUI
-
-Install the GTK 3 development files, then configure with `-DCDIE_BUILD_GUI=ON`
-and build the `cdie_gui` target. Run `src/gui/cdie_gui` from the build directory,
-optionally passing a file path. Browse or drop a file to scan it; the shared
-inspection buttons include File Information, Entropy, Hash, Strings, Hex View,
-Disasm, Memory Map, Imports, Exports, Resources and Symbols. F5 scans, Ctrl+O
-opens a file, Ctrl+R shows the report and Ctrl+Shift+Y opens Symbols.
-**Database paths** (F3) edits or browses the main, extra and custom signature
-folders. Empty paths use the default folders; Defaults clears all three entries.
-OK reloads the databases and refreshes the tags and results. A failed main
-database load keeps the preceding databases and leaves the form open for retry;
-Cancel preserves them. The GUI also opens without a database so F3 can locate it.
-**Fonts** (F4) reuses the shared font options form for controls, tables, trees and
-text edits, with native GTK font pickers and per-role defaults. OK applies the
-choices to the current session; Cancel preserves the active fonts. Database
-paths and fonts are session settings.
+The CMake target names remain `cdie_gui` and `cdie` for build-script compatibility.
+Linux GUI builds require the GTK 3 development package.
 
 ## macOS GUI
 
-The macOS build also produces `src/gui/cdie_gui.app`. Open the app in Finder,
+The macOS build produces only `src/gui/die.app`. Open the app in Finder,
 choose a file with **Open** (Cmd+O), or drop a file onto its window or Dock icon.
 Window drops use the shared xxwidgets file-drop event on macOS and Windows,
 including over the result tree and path field. A drop starts scanning the first
@@ -559,7 +443,7 @@ See [docs/BUILDING.md](docs/BUILDING.md#macos-gui) for build and smoke-test comm
 
 ## Windows GUI
 
-`cdie_gui.exe` uses the reusable xxwidgets scan panel and options dialogs.
+`die.exe` uses the reusable xxwidgets scan panel and options dialogs.
 Choose or drop a file, then select a file type to scan it again with that
 parser. **Scan options** edits the flags and optional databases; **Fonts**
 chooses fonts for controls, tables, result trees and text. OK applies these
@@ -585,7 +469,7 @@ registration. Explorer settings remain registered until disabled. A file
 argument also loads and scans directly:
 
 ```bat
-cdie_gui.exe "C:\path with spaces\sample.exe"
+die.exe "C:\path with spaces\sample.exe"
 ```
 
 ---
@@ -593,7 +477,7 @@ cdie_gui.exe "C:\path with spaces\sample.exe"
 ## Command line
 
 ```text
-cdie [options] target
+diec [options] target
 ```
 
 The common xxfclib terminal options enable or disable acceleration preferences
@@ -606,13 +490,13 @@ machine are accepted and ignored. The last switch for each feature wins.
 Disable every x86 preference with:
 
 ```bash
-cdie --nosse2 --nosse42 --noavx2 --noaes --nosha --novpclmulqdq -D /path/to/Detect-It-Easy/db /path/to/target.exe
+diec --nosse2 --nosse42 --noavx2 --noaes --nosha --novpclmulqdq -D /path/to/Detect-It-Easy/db /path/to/target.exe
 ```
 
 Disable every Arm preference with:
 
 ```bash
-cdie --noneon --noarmcrc32 --noarmcrypto --noarmdotprod --noarmpmull -D /path/to/Detect-It-Easy/db /path/to/target.exe
+diec --noneon --noarmcrc32 --noarmcrypto --noarmdotprod --noarmpmull -D /path/to/Detect-It-Easy/db /path/to/target.exe
 ```
 
 Hyphenated `--no-*` spellings are accepted. Arm features may be enabled with
@@ -640,15 +524,7 @@ accepted as an alias (shown in parentheses) except where it would collide.
 | `-u` (`-he`), `--heuristicscan` | enable heuristic signatures (`HEUR.*`) |
 | `-g`, `--aggressivecscan` | aggressive scan (`--aggressivescan` also accepted) |
 | `-b` (`-V`), `--verbose` | verbose detections (operation system, language, …) |
-| `-a`, `--alltypes` | scan applicable parent formats |
-| `--overlayscan`, `--resourcesscan`, `--archivesscan` | enable bounded child scans |
-| `--strings`, `-S Strings` | extract ASCII/UTF-8 and UTF-16 string candidates |
-| `--strings-min`, `--strings-encoding` | set minimum length / decoding for Strings mode |
-| `--hash`, `-S Hash` | whole-file CRC32, MD5, SHA1 and SHA256 |
-| `-e`, `--entropy` | whole-file and region Shannon entropy |
-| `-i`, `--info` | dump PE/ELF/Mach-O native DataStructs |
-| `-S`, `--struct <name>` | select a native structure or `NAME#FIELD` |
-| `-w`, `--showstructs` | list present structures, or the catalog without a target |
+| `-a` (`-A`), `--alltypes` | scan applicable parent file types |
 | `-f`, `--format` | put a space before `(version)` and `[info]` |
 | `-U` (`-hu`), `--hideunknown` | drop `Unknown: Unknown` results |
 | `-M` (`-m`), `--messages` | print engine/script messages on stderr |
@@ -660,8 +536,6 @@ accepted as an alias (shown in parentheses) except where it would collide.
 | `-D`, `--database <path>` | main database directory |
 | `-E`, `--extradatabase <path>` | extra database directory |
 | `-C`, `--customdatabase <path>` | custom database directory |
-| `--includetags`, `--include-tags <list>` | run signatures having any listed tag; separate tags with `;` |
-| `--excludetags`, `--exclude-tags <list>` | skip signatures having any listed tag; separate tags with `;` (exclusion wins) |
 | `-s`, `--showdatabase` | print database paths and signature counts |
 
 Output formats are mutually exclusive and may be selected only once. JSON and
@@ -670,10 +544,10 @@ form records each path with its scan result. They also cover version/help,
 database reports and database TAR creation without mixing plain text into
 standard output.
 
-`diec`'s `-e`/`--entropy`, `--test` and `--createtest` are not ported; see
+`--test` and `--createtest` are not ported; see
 [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 
-When a database path is not given, `cdie` looks for `db`, `db_extra` and
+When a database path is not given, `diec` looks for `db`, `db_extra` and
 `db_custom` next to the executable and then in the working directory.
 
 Exit codes follow the original tool: `0` success, `1` file not found,
@@ -764,11 +638,3 @@ ARM64 builds also expose `--armpmull` / `--noarmpmull` (aliases
 PMULL is enabled when detected. The accelerated CRC32/CRC32C paths require
 both Arm CRC32 and PMULL enabled, and apply to buffers of at least 3072 bytes.
 Disabling either feature retains the existing fallback paths.
-
-## GUI/TUI translations
-
-Start `cdie_gui` or `cdie_tui` with `--translation FILE.po`, or set
-`CDIE_TRANSLATION`, to translate the interface using a UTF-8 PO catalog shared
-with xxwidgets. A partial German catalog is in `translations/de.po`; English
-is the default and fallback. See [translation support](docs/TRANSLATION.md)
-for catalog editing, packaging and tests.
