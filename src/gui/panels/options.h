@@ -15,7 +15,8 @@ enum {
   OPTIONS_PAGE_DATABASES,
   OPTIONS_PAGE_OPTIMIZATION,
   OPTIONS_PAGE_FONTS,
-  OPTIONS_PAGE_CONTEXT
+  OPTIONS_PAGE_CONTEXT,
+  OPTIONS_PAGE_ABOUT
 };
 
 enum {
@@ -54,6 +55,8 @@ typedef struct OptionsHost {
 
   int  context_available;      /* 0 hides the Context menu page */
   int  updates_available;      /* 0 hides the Update page */
+  int (*open_url)(void* user, const char* url);
+  int (*copy_text)(void* user, const char* text);
 
   int  (*browse_folder)(void* user, char* out, size_t cap);
   void (*db_changed)(void* user);

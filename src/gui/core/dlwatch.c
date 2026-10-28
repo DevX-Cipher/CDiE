@@ -55,16 +55,6 @@
 
 #define PLAT_PATH_MAX 4096
 
-int  dlp_start(void);
-void dlp_stop(void);
-int  dlp_running(void);
-
-void dlp_timer(int on);
-
-uint64_t dlp_tick_ms(void);
-int  dlp_file_size(const char* utf8_path, uint64_t* size);   /* regular files only */
-int  dlp_can_open(const char* utf8_path, int exclusive);     /* exclusive: fail if a writer holds it (Windows only) */
-
 #define DL_MAX          8
 #define DL_MAX_AGE      14400   /* ticks of 250 ms = 1 hour */
 #define DL_DEDUP_MS     15000
