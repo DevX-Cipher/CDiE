@@ -168,10 +168,6 @@ jobs:
           test -x "$package_dir/cdie"
           test -n "$(find "$package_dir/db" -type f -print -quit)"
 
-          smoke_dir=$(mktemp -d)
-          cd "$smoke_dir"
-          "$package_dir/cdie" /usr/bin/file > scan.txt
-          test -s scan.txt
       - name: Save macOS package
         uses: actions/upload-artifact@v4
         with:

@@ -34,3 +34,6 @@ Makefile
 
 # internal notes, not part of the shipped package
 private_docs/
+
+# Developer tests stay local and are not published to GitHub.
+/tests/
