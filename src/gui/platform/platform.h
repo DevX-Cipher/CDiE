@@ -60,17 +60,22 @@ typedef uint32_t PlColor;                       /* 0xRRGGBB */
   } PlWidgetOps;
 
   /* ---- widgets ---- */
-  PlWidget* pl_widget_create(void* parent_native, const PlWidgetOps* ops, void* user,
-    int x, int y, int w, int h);
+  PlWidget* pl_widget_create(void* parent_native, const PlWidgetOps* ops, void* user, int x, int y, int w, int h);
   void pl_widget_destroy(PlWidget* w);
   void pl_widget_set_rect(PlWidget* w, int x, int y, int width, int height);
   int  pl_parent_size(PlWidget* w, int* width, int* height);
   void pl_invalidate(PlWidget* w, const PlRect* r);
 
+
+
   /* ---- fonts ---- */
   PlFont* pl_font_create(int pt, int bold);
   void    pl_font_destroy(PlFont* f);
   int     pl_text_width(PlFont* f, const char* utf8);
+  PlFont* pl_font_create_family(const char* family, int pt, int bold);  /* NULL if unavailable */
+#ifdef _WIN32
+#define PL_HAS_FONT_FAMILY 1
+#endif
 
   /* ---- drawing ---- */
   void pl_fill(PlCanvas* c, int l, int t, int r, int b, PlColor col);
@@ -78,14 +83,12 @@ typedef uint32_t PlColor;                       /* 0xRRGGBB */
   void pl_round_rect(PlCanvas* c, PlRect r, PlColor fill, PlColor border, int radius);
   void pl_ellipse(PlCanvas* c, int l, int t, int r, int b, PlColor fill, PlColor border);
   void pl_text(PlCanvas* c, PlFont* f, PlRect r, const char* utf8, PlColor col, int flags);
-  void pl_image(PlCanvas* c, int x, int y, int w, int h,
-    int src_w, int src_h, const unsigned char* rgba);
+  void pl_image(PlCanvas* c, int x, int y, int w, int h, int src_w, int src_h, const unsigned char* rgba);
 
   /* ---- top-level window (modal dialogs) ---- */
-  PlWindow* pl_window_create(void* owner_native, const char* title, int w, int h,
-    int min_w, int min_h,
-    void (*on_size)(void* u, int w, int h),
-    void (*on_close)(void* u), void* user);
+  PlWindow* pl_window_create(void* owner_native, const char* title, int w, int h, int min_w, int min_h,
+  void (*on_size)(void* u, int w, int h),
+  void (*on_close)(void* u), void* user);
   void* pl_window_client(PlWindow* win);          
   void  pl_window_run_modal(PlWindow* win);       
   void  pl_window_close(PlWindow* win);

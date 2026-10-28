@@ -57,7 +57,7 @@ enum {
   ID_FVAL0, ID_FVAL1, ID_FVAL2, ID_FVAL3,
   ID_CTX_TOGGLE,
   ID_CHECK_UPDATE,
-  ID_OPEN_SITE, ID_OPEN_GITHUB, ID_OPEN_RELEASES,
+  ID_OPEN_SITE, ID_OPEN_GITHUB, ID_OPEN_RELEASES, ID_COPY_BOX,
   ID_OK, ID_CANCEL, ID_APPLY
 };
 
@@ -89,7 +89,9 @@ typedef struct Opt {
   char aboutmsg[96];
   char buildline[64], copyline[64];
   int  about_scroll, about_lines, about_vis;
-  char** fnames;              
+  PlRect about_in;
+  int  about_sel;
+  char** fnames;
   int nfnames, capfnames, fonts_loaded;
   int dd_open, dd_role, dd_scroll, dd_hov;
   PlRect dd_r;
@@ -179,9 +181,14 @@ static void txt(PlCanvas* c, PlFont* f, PlColor col, PlRect r, int al, const cha
 #define ABOUT_BOX \
   "INFO\n" ABOUT_INFO "\n\nLIBRARIES\n" ABOUT_LIBS "\n\nLICENSE\n" ABOUT_LICENSE
 
+static int s_pick = -1;
+static char s_pick_buf[512];
+
 static void emit_line(PlCanvas* c, PlFont* f, PlColor col, PlRect r, int lh,
   int skip, int draw, int* lines, const char* s)
 {
+  if (s_pick >= 0 && *lines == s_pick)
+    snprintf(s_pick_buf, sizeof(s_pick_buf), "%s", s);
   if (draw && *lines >= skip) {
     int y = r.t + (*lines - skip) * lh;
     if (y + lh <= r.b && s[0])
@@ -222,6 +229,33 @@ static int wrap_text(PlCanvas* c, PlFont* f, PlColor col, PlRect r,
     }
   }
   return lines;
+}
+
+static void to_crlf(const char* s, char* d, size_t cap)
+{
+  size_t n = 0;
+  while (*s && n + 3 < cap) {
+    if (*s == '\n') d[n++] = '\r';
+    d[n++] = *s++;
+  }
+  d[n] = 0;
+}
+
+static int about_line_at(Opt* o, int x, int y, char* out, size_t cap)
+{
+  PlRect in = o->about_in;
+  int line, lines;
+  out[0] = 0;
+  if (o->page != PG_ABOUT || in.r <= in.l ||
+    x < in.l || x >= in.r || y < in.t || y >= in.b) return -1;
+  line = o->about_scroll + (y - in.t) / 18;
+  s_pick = line;
+  s_pick_buf[0] = 0;
+  lines = wrap_text(NULL, o->font, CLR_TEXT_SECONDARY, in, ABOUT_BOX, 18, 0, 0);
+  s_pick = -1;
+  if (line >= lines) return -1;
+  snprintf(out, cap, "%s", s_pick_buf);
+  return line;
 }
 
 static void card(PlCanvas* c, PlRect r, int headH)
@@ -483,11 +517,12 @@ static void build_items(Opt* o)
     add(o, IK_TEXT, 0, o->verline, 1, x, y, x + w, y + 22); y += 22;
     add(o, IK_NOTE, 0, o->buildline, 1, x, y, x + w, y + 22); y += 22;
     add(o, IK_NOTE, 0, ABOUT_COPYRIGHT_OLD, 1, x, y, x + w, y + 22); y += 22;
-    add(o, IK_NOTE, 0, o->copyline, 1, x, y, x + w, y + 22); y += 34;
-    add(o, IK_BTN, ID_OPEN_SITE, "Website", 1, x, y, x + 110, y + 32);
-    add(o, IK_BTN, ID_OPEN_GITHUB, "GitHub", 1, x + 118, y, x + 228, y + 32);
-    add(o, IK_BTN, ID_OPEN_RELEASES, "Releases", 1, x + 236, y, x + 346, y + 32);
-    add(o, IK_NOTE, 0, o->aboutmsg, 1, x + 356, y, x + w, y + 32); y += 44;
+    add(o, IK_NOTE, 0, o->copyline, 1, x, y, x + w, y + 22); y += 30;
+    add(o, IK_BTN, ID_OPEN_SITE, "Website", 1, x, y, x + 84, y + 32);
+    add(o, IK_BTN, ID_OPEN_GITHUB, "GitHub", 1, x + 92, y, x + 176, y + 32);
+    add(o, IK_BTN, ID_OPEN_RELEASES, "Releases", 1, x + 184, y, x + 268, y + 32);
+    add(o, IK_BTN, ID_COPY_BOX, "Copy text", 1, x + 276, y, x + 360, y + 32); y += 36;
+    add(o, IK_NOTE, 0, o->aboutmsg, 1, x, y, x + w, y + 20); y += 24;
     bh = o->r_card.b - 16 - y;
     if (bh < 60) bh = 60;
     add(o, IK_SCROLL, 0, "", 1, x, y, x + w, y + bh);
@@ -606,6 +641,12 @@ static void paint_item(Opt* o, PlCanvas* c, int i)
     PlRect in = mkr(r.l + 12, r.t + 8, r.r - 20, r.b - 8);
     int lh = 18, vis = (in.b - in.t) / lh, total;
     pl_round_rect(c, r, CLR_PANEL_HEADER, CLR_PANEL_BORDER, 8);
+    o->about_in = in;
+    if (o->about_sel >= o->about_scroll && o->about_sel < o->about_scroll + vis) {
+      int sy = in.t + (o->about_sel - o->about_scroll) * lh;
+      pl_round_rect(c, mkr(in.l - 4, sy, in.r + 4, sy + lh),
+        CLR_SIDEBAR_SEL, CLR_SIDEBAR_SEL, 4);
+    }
     total = wrap_text(c, o->font, CLR_TEXT_SECONDARY, in, ABOUT_BOX, lh, o->about_scroll, 1);
     o->about_lines = total;
     o->about_vis = vis;
@@ -853,6 +894,17 @@ static void activate(Opt* o, int id)
       o->aboutmsg[0] = 0;
     break;
   }
+  case ID_COPY_BOX: {
+    char src[4096], dst[6144];
+    snprintf(src, sizeof(src), "Detect It Easy - cdie\n%s\n%s\n%s\n%s\n\n%s",
+      o->verline, o->buildline, ABOUT_COPYRIGHT_OLD, o->copyline, ABOUT_BOX);
+    to_crlf(src, dst, sizeof(dst));
+    if (o->host.copy_text && o->host.copy_text(o->host.user, dst))
+      snprintf(o->aboutmsg, sizeof(o->aboutmsg), "Copied to the clipboard.");
+    else
+      snprintf(o->aboutmsg, sizeof(o->aboutmsg), "Could not copy to the clipboard.");
+    break;
+  }
   default:
     if (id >= ID_FVAL0 && id <= ID_FVAL3) {
       open_dropdown(o, id - ID_FVAL0);
@@ -948,8 +1000,13 @@ static void on_key(void* u, int key, uint32_t ch, int mods)
   int i, cur = 0;
   (void)ch; (void)mods;
 
-  if (o->dd_open) {                       
+  if (o->dd_open) {
     if (key == PL_KEY_ESC) { o->dd_open = 0; redraw(o); }
+    return;
+  }
+  if (o->page == PG_ABOUT && ch == 3) {      /* Ctrl+C */
+    activate(o, ID_COPY_BOX);
+    redraw(o);
     return;
   }
   if (key == PL_KEY_ESC) { finish(o, OPTIONS_RESULT_NONE); return; }

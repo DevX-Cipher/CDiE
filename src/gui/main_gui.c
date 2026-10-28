@@ -53,6 +53,7 @@
 #include "controls/tabbar.h"
 #include "controls/bottombar.h"
 #include "controls/treeview.h"
+#include "controls/hexviewer.h"
 #include "core/tray.h"
 #include "core/dlwatch.h"
 
@@ -97,6 +98,9 @@ static Header* g_header_wnd;
 static Infobar* g_infobar_wnd;
 static Bottombar* g_bottombar;
 static ResultsTree* g_tree;
+static HexViewer* g_hex;
+static int g_page = NAV_OVERVIEW;
+static HANDLE g_hexFile = INVALID_HANDLE_VALUE;
 
 static int  g_running, g_pending;
 static int  g_startMonitor;
@@ -163,6 +167,42 @@ static char* copy_utf8(const char* text)
 	copy = (char*)HeapAlloc(GetProcessHeap(), 0, length + 1);
 	if (copy) CopyMemory(copy, text, length + 1);
 	return copy;
+}
+
+static int hex_read(void* u, uint64_t off, void* buf, size_t len)
+{
+	LARGE_INTEGER pos;
+	(void)u;
+	if (g_hexFile == INVALID_HANDLE_VALUE) return 0;
+	pos.QuadPart = (LONGLONG)off;
+	if (!SetFilePointerEx(g_hexFile, pos, NULL, FILE_BEGIN)) return 0;
+	while (len) {
+		DWORD got = 0, n = len > 0x100000 ? 0x100000 : (DWORD)len;
+		if (!ReadFile(g_hexFile, buf, n, &got, NULL) || !got) return 0;
+		buf = (char*)buf + got;
+		len -= got;
+	}
+	return 1;
+}
+
+static void hex_close(void)
+{
+	if (g_hexFile != INVALID_HANDLE_VALUE) CloseHandle(g_hexFile);
+	g_hexFile = INVALID_HANDLE_VALUE;
+}
+
+static void hex_open(const char* utf8_path)
+{
+	WCHAR* wide = utf8_to_wide(utf8_path);
+	LARGE_INTEGER size;
+	hex_close();
+	if (!wide) return;
+	g_hexFile = CreateFileW(wide, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+		NULL, OPEN_EXISTING, 0, NULL);
+	HeapFree(GetProcessHeap(), 0, wide);
+	if (g_hexFile == INVALID_HANDLE_VALUE) return;
+	if (!GetFileSizeEx(g_hexFile, &size)) { hex_close(); return; }
+	if (g_hex) hexview_set_source(g_hex, (uint64_t)size.QuadPart, hex_read, NULL, 0);
 }
 
 static void set_status_wide(const WCHAR* wide)
@@ -647,6 +687,7 @@ static void do_scan(void)
 				update_chrome_after_scan(path, type);
 				if (g_lastPath) HeapFree(GetProcessHeap(), 0, g_lastPath);
 				g_lastPath = copy_utf8(path);
+				hex_open(path);
 			}
 		}
 		wsprintfW(text, L"%u ms", msec);
@@ -1052,7 +1093,11 @@ static void layout(void)
 		if (tw < 40) tw = 40;
 		if (th < 40) th = 40;
 		if (g_tree)
-			pl_widget_set_rect(resultstree_widget(g_tree), tx, ty, tw, th);
+			pl_widget_set_rect(resultstree_widget(g_tree), tx, ty,
+				g_page == NAV_HEX ? 0 : tw, g_page == NAV_HEX ? 0 : th);
+		if (g_hex)
+			hexview_set_rect(g_hex, tx, ty,
+				g_page == NAV_HEX ? tw : 0, g_page == NAV_HEX ? th : 0);
 	}
 
 #define HIDE(w) if (w) MoveWindow(native(w), -9999, 0, 100, 26, FALSE)
@@ -1108,6 +1153,12 @@ static void on_nav(void* user, int nav_id)
 
 	case NAV_STRINGS:
 		g_pending = ACTION_STRINGS;
+		break;
+
+	case NAV_OVERVIEW:
+	case NAV_HEX:
+		g_page = nav_id;
+		layout();
 		break;
 
 	default:
@@ -1305,9 +1356,11 @@ static int create_controls(void)
 	g_infobar_wnd = infobar_create(native(g_window), SIDEBAR_W, HEADER_H, 800, INFOBAR_H);
 	g_bottombar = bottombar_create(native(g_window), SIDEBAR_W, 500, 800, BOTTOMBAR_H, NULL, NULL);
 	g_tree = resultstree_create(native(g_window), SIDEBAR_W, 0, 100, 100);
+	g_hex = hexview_create(native(g_window), NULL, SIDEBAR_W, 0, 0, 0);
+	if (g_hex) hexview_set_callbacks(g_hex, NULL, opt_copy_text, NULL);
 	SetWindowSubclass(native(g_status), status_subclass, 3, 0);
 
-	if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || !g_bottombar || !g_tree) {
+	if (!g_sidebar || !g_header_wnd || !g_infobar_wnd || !g_bottombar || !g_tree || !g_hex) {
 		WCHAR msg[200];
 		wsprintfW(msg,
 			L"Chrome creation failed (1 = ok):\nsidebar=%d header=%d infobar=%d "
@@ -1558,9 +1611,12 @@ int gui_run(void)
 			break;
 		default: break;
 		}
+		if (g_sidebar && sidebar_get_selected(g_sidebar) != g_page)
+			sidebar_set_selected(g_sidebar, g_page);
 	}
 
 finish:
+	hex_close();
 	dlwatch_shutdown();
 	tray_remove();
 	save_config_on_exit();
