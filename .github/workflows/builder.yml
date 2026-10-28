@@ -187,10 +187,6 @@ jobs:
             test ! -e "$package_dir/$excluded"
           done
 
-          smoke_dir=$(mktemp -d)
-          cd "$smoke_dir"
-          "$package_dir/die.app/Contents/MacOS/die" --smoke-test /usr/bin/file > scan.txt
-          test -s scan.txt
       - name: Save macOS package
         uses: actions/upload-artifact@v4
         with:

@@ -62,13 +62,12 @@ python3 tests/test_compatibility.py --cdie build/src/console/diec \
   --reference /absolute/path/to/diec --suite reference
 ```
 
-The GitHub compatibility workflow builds pinned dependencies and runs the
-public regressions on Linux, Windows and macOS. macOS builds only the GUI, so
-its tests exercise backend models and native Cocoa smoke checks without a
-console executable. Linux and Windows also run console regressions. The
-Windows job runs the native GUI smoke test, including applying and cancelling
-expansion controls.
-Large real-world corpus and decoder parity sweeps remain separate work.
+Compatibility tests, native GUI smoke tests, and corpus comparisons run only
+locally. The developer source tree keeps tests/ and private_tests/; these
+folders are excluded from publication to GitHub. Run the commands above from
+a local tree containing tests/. GitHub Actions builds and packages releases
+and checks package contents, but does not run application tests.
+Large real-world corpus and decoder parity sweeps remain separate local work.
 
 ### Private corpus comparison
 
