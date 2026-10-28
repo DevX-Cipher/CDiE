@@ -38,10 +38,12 @@
 #define DD_ROW 26
 #define DD_MAXVIS 8
 
-enum { PG_SCAN, PG_DB, PG_OPT, PG_FONTS, PG_CTX, PG_UPDATE, PG_COUNT };
+enum { PG_SCAN, PG_DB, PG_OPT, PG_FONTS, PG_CTX, PG_UPDATE, PG_ABOUT, PG_COUNT };
 
-enum { IK_HEAD, IK_TEXT, IK_NOTE, IK_CHECK, IK_BTN, IK_ACCENT, IK_VALUE, IK_PATH, IK_FVAL };
-
+enum {
+  IK_HEAD, IK_TEXT, IK_NOTE, IK_CHECK, IK_BTN, IK_ACCENT, IK_VALUE, IK_PATH, IK_FVAL,
+  IK_PARA, IK_SCROLL
+};
 enum {
   ID_NONE,
   ID_DEEP, ID_HEUR, ID_AGGR, ID_VERBOSE, ID_HIDE, ID_FORMAT, ID_MONITOR,
@@ -55,6 +57,7 @@ enum {
   ID_FVAL0, ID_FVAL1, ID_FVAL2, ID_FVAL3,
   ID_CTX_TOGGLE,
   ID_CHECK_UPDATE,
+  ID_OPEN_SITE, ID_OPEN_GITHUB, ID_OPEN_RELEASES,
   ID_OK, ID_CANCEL, ID_APPLY
 };
 
@@ -83,6 +86,9 @@ typedef struct Opt {
   char ctxmsg[96];
   char verline[96];
   char updmsg[160];
+  char aboutmsg[96];
+  char buildline[64], copyline[64];
+  int  about_scroll, about_lines, about_vis;
   char** fnames;              
   int nfnames, capfnames, fonts_loaded;
   int dd_open, dd_role, dd_scroll, dd_hov;
@@ -92,19 +98,30 @@ typedef struct Opt {
 static Opt* s_opt;
 
 static const char* s_title[PG_COUNT] =
-{ "Scan", "Databases", "Optimization", "Fonts", "Context menu", "Update" };
+{ "Scan", "Databases", "Optimization", "Fonts", "Context menu", "Update", "About" };
 static const char* s_sub[PG_COUNT] = {
   "How files are scanned and how results are shown",
   "Signature databases used by the scan engine",
   "Buffer sizes and CPU acceleration",
   "Interface fonts",
   "Explorer integration",
-  "Check for updates"
+  "Check for updates",
+  "Version, license, and project info"
 };
 
 static PlRect mkr(int l, int t, int r, int b) { PlRect x; x.l = l; x.t = t; x.r = r; x.b = b; return x; }
 static int inr(const PlRect* r, int x, int y) { return x >= r->l && x < r->r && y >= r->t && y < r->b; }
 static int imax(int a, int b) { return a > b ? a : b; }
+
+static int nav_yoff(Opt* o, int i)
+{
+  int pg = o->navpg[i];
+  if (pg == PG_UPDATE || pg == PG_ABOUT) {
+    int below = o->nnav - 1 - i;
+    return (o->r_nav.b - o->r_nav.t) - 12 - (below + 1) * NAV_H;
+  }
+  return 12 + i * NAV_H;
+}
 
 static void redraw(Opt* o)
 {
@@ -127,6 +144,84 @@ static void txt(PlCanvas* c, PlFont* f, PlColor col, PlRect r, int al, const cha
     if (w < r.r - r.l) r.l = r.r - w;
   }
   pl_text(c, f, r, t, col, al == 2 ? PL_TEXT_LEFT : PL_TEXT_ELLIPSIS);
+}
+
+#define ABOUT_COPYRIGHT_OLD "Copyright (C) 2006-2008 Hellsp@wn"
+#define ABOUT_INFO \
+  "Bugreports: horsicq@gmail.com\n" \
+  "Website: http://ntinfo.biz\n" \
+  "Source code: https://github.com/horsicq/CDiE\n" \
+  "GitHub: https://github.com/horsicq\n" \
+  "Twitter: https://twitter.com/horsicq\n" \
+  "YouTube: https://www.youtube.com/@funreverseengineering\n" \
+  "Donate (PayPal): ntinfo.re@gmail.com\n" \
+  "Donate (BTC): 3DqddVBX9PKqMvNPXZ3gPHBNNRtD9CnmJo"
+#define ABOUT_LIBS \
+  "xxfclib: formats, scan engine and runtime\n" \
+  "xxwidgets: native widgets and dialogs\n" \
+  "cdisasm: disassembler"
+#define ABOUT_LICENSE \
+  "MIT License\n\n" \
+  "Permission is hereby granted, free of charge, to any person obtaining a copy " \
+  "of this software and associated documentation files (the Software), to deal " \
+  "in the Software without restriction, including without limitation the rights " \
+  "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell " \
+  "copies of the Software, and to permit persons to whom the Software is " \
+  "furnished to do so, subject to the following conditions:\n\n" \
+  "The above copyright notice and this permission notice shall be included in all " \
+  "copies or substantial portions of the Software.\n\n" \
+  "THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR " \
+  "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, " \
+  "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE " \
+  "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER " \
+  "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, " \
+  "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE."
+#define ABOUT_BOX \
+  "INFO\n" ABOUT_INFO "\n\nLIBRARIES\n" ABOUT_LIBS "\n\nLICENSE\n" ABOUT_LICENSE
+
+static void emit_line(PlCanvas* c, PlFont* f, PlColor col, PlRect r, int lh,
+  int skip, int draw, int* lines, const char* s)
+{
+  if (draw && *lines >= skip) {
+    int y = r.t + (*lines - skip) * lh;
+    if (y + lh <= r.b && s[0])
+      txt(c, f, col, mkr(r.l, y, r.r, y + lh), 0, s);
+  }
+  ++ * lines;
+}
+
+static int wrap_text(PlCanvas* c, PlFont* f, PlColor col, PlRect r,
+  const char* text, int lh, int skip, int draw)
+{
+  char line[512], word[256], cand[768];
+  int width = r.r - r.l, lines = 0;
+  const char* p = text;
+  line[0] = 0;
+  for (;;) {
+    if (*p == '\n' || *p == 0) {
+      emit_line(c, f, col, r, lh, skip, draw, &lines, line);
+      line[0] = 0;
+      if (*p == 0) break;
+      ++p;
+      continue;
+    }
+    if (*p == ' ') { ++p; continue; }
+    {
+      size_t wl = 0;
+      while (*p && *p != ' ' && *p != '\n' && wl < sizeof(word) - 1) word[wl++] = *p++;
+      word[wl] = 0;
+      if (line[0]) snprintf(cand, sizeof(cand), "%s %s", line, word);
+      else snprintf(cand, sizeof(cand), "%s", word);
+      if (line[0] && pl_text_width(f, cand) > width) {
+        emit_line(c, f, col, r, lh, skip, draw, &lines, line);
+        snprintf(line, sizeof(line), "%s", word);
+      }
+      else {
+        snprintf(line, sizeof(line), "%s", cand);
+      }
+    }
+  }
+  return lines;
 }
 
 static void card(PlCanvas* c, PlRect r, int headH)
@@ -382,6 +477,23 @@ static void build_items(Opt* o)
     add(o, IK_NOTE, 0, o->updmsg, 1, x, y, x + w, y + 22);
     break;
 
+  case PG_ABOUT: {
+    int bh;
+    add(o, IK_HEAD, 0, "DETECT IT EASY - CDIE", 1, x, y, x + w, y + 20); y += 26;
+    add(o, IK_TEXT, 0, o->verline, 1, x, y, x + w, y + 22); y += 22;
+    add(o, IK_NOTE, 0, o->buildline, 1, x, y, x + w, y + 22); y += 22;
+    add(o, IK_NOTE, 0, ABOUT_COPYRIGHT_OLD, 1, x, y, x + w, y + 22); y += 22;
+    add(o, IK_NOTE, 0, o->copyline, 1, x, y, x + w, y + 22); y += 34;
+    add(o, IK_BTN, ID_OPEN_SITE, "Website", 1, x, y, x + 110, y + 32);
+    add(o, IK_BTN, ID_OPEN_GITHUB, "GitHub", 1, x + 118, y, x + 228, y + 32);
+    add(o, IK_BTN, ID_OPEN_RELEASES, "Releases", 1, x + 236, y, x + 346, y + 32);
+    add(o, IK_NOTE, 0, o->aboutmsg, 1, x + 356, y, x + w, y + 32); y += 44;
+    bh = o->r_card.b - 16 - y;
+    if (bh < 60) bh = 60;
+    add(o, IK_SCROLL, 0, "", 1, x, y, x + w, y + bh);
+    break;
+  }
+
   default: break;
   }
 
@@ -403,6 +515,7 @@ static void layout(Opt* o)
 static void set_page(Opt* o, int page)
 {
   o->page = page;
+  o->about_scroll = 0;
   o->dd_open = 0;
   o->hov = -1;
   build_items(o);
@@ -482,6 +595,27 @@ static void paint_item(Opt* o, PlCanvas* c, int i)
         f->family[0] ? f->family : "Default",
         f->bold ? ", Bold" : "", f->italic ? ", Italic" : "");
     txt(c, o->font, CLR_TEXT_PRIMARY, mkr(r.l + 12, r.t, r.r - 30, r.b), 0, buf);
+    break;
+  }
+
+  case IK_PARA:
+    wrap_text(c, o->font, CLR_TEXT_PRIMARY, r, it->text, 18, 0, 1);
+    break;
+
+  case IK_SCROLL: {
+    PlRect in = mkr(r.l + 12, r.t + 8, r.r - 20, r.b - 8);
+    int lh = 18, vis = (in.b - in.t) / lh, total;
+    pl_round_rect(c, r, CLR_PANEL_HEADER, CLR_PANEL_BORDER, 8);
+    total = wrap_text(c, o->font, CLR_TEXT_SECONDARY, in, ABOUT_BOX, lh, o->about_scroll, 1);
+    o->about_lines = total;
+    o->about_vis = vis;
+    if (total > vis) {
+      int track = r.b - r.t - 16;
+      int th = imax(18, track * vis / total);
+      int ty = r.t + 8 + (track - th) * o->about_scroll / (total - vis);
+      pl_round_rect(c, mkr(r.r - 11, ty, r.r - 7, ty + th),
+        CLR_BTN_GHOST_BD, CLR_BTN_GHOST_BD, 2);
+    }
     break;
   }
 
@@ -618,10 +752,7 @@ static void on_paint(void* u, PlCanvas* c, int w, int h)
 
   pl_round_rect(c, o->r_nav, CLR_PANEL_HEADER, CLR_PANEL_BORDER, 12);
   for (i = 0; i < o->nnav; ++i) {
-    int yoff = 12 + i * NAV_H;
-
-    if (o->navpg[i] == PG_UPDATE)
-      yoff += 150;
+    int yoff = nav_yoff(o, i);
 
     PlRect nr = mkr(o->r_nav.l + 8, o->r_nav.t + yoff,
       o->r_nav.r - 8, o->r_nav.t + yoff + NAV_H - 2);
@@ -668,10 +799,7 @@ static int hit_nav(Opt* o, int x, int y)
 {
   int i;
   for (i = 0; i < o->nnav; ++i) {
-    int yoff = 12 + i * NAV_H;
-
-    if (o->navpg[i] == PG_UPDATE)
-      yoff += 150;
+    int yoff = nav_yoff(o, i);
 
     PlRect nr = mkr(o->r_nav.l + 8, o->r_nav.t + yoff,
       o->r_nav.r - 8, o->r_nav.t + yoff + NAV_H - 2);
@@ -714,6 +842,17 @@ static void activate(Opt* o, int id)
   case ID_CTX_TOGGLE:
     if (o->have_ctx) { o->ctxenabled = !o->ctxenabled; o->ctxdirty = 1; }
     break;
+  case ID_OPEN_SITE: case ID_OPEN_GITHUB: case ID_OPEN_RELEASES: {
+    const char* url =
+      id == ID_OPEN_SITE ? "http://ntinfo.biz" :
+      id == ID_OPEN_GITHUB ? "https://github.com/horsicq" :
+      "https://github.com/horsicq/CDiE/releases";
+    if (!o->host.open_url || !o->host.open_url(o->host.user, url))
+      snprintf(o->aboutmsg, sizeof(o->aboutmsg), "Could not open the browser.");
+    else
+      o->aboutmsg[0] = 0;
+    break;
+  }
   default:
     if (id >= ID_FVAL0 && id <= ID_FVAL3) {
       open_dropdown(o, id - ID_FVAL0);
@@ -787,11 +926,20 @@ static void on_wheel(void* u, int x, int y, int delta, int mods)
 {
   Opt* o = (Opt*)u;
   (void)mods;
-  if (!o->dd_open || !delta) return;
-  o->dd_scroll += delta > 0 ? -3 : 3;  
-  dd_clamp(o);
-  o->dd_hov = dd_hit(o, x, y);
-  redraw(o);
+  if (!delta) return;
+  if (o->dd_open) {
+    o->dd_scroll += delta > 0 ? -3 : 3;
+    dd_clamp(o);
+    o->dd_hov = dd_hit(o, x, y);
+    redraw(o);
+  }
+  else if (o->page == PG_ABOUT) {
+    int max = o->about_lines - o->about_vis;
+    o->about_scroll += delta > 0 ? -3 : 3;
+    if (o->about_scroll > max) o->about_scroll = max;
+    if (o->about_scroll < 0) o->about_scroll = 0;
+    redraw(o);
+  }
 }
 
 static void on_key(void* u, int key, uint32_t ch, int mods)
@@ -896,6 +1044,8 @@ int options_show(xxwidgets_app* app, xxwidgets_widget* owner,
     snprintf(o->verline, sizeof(o->verline), "Current version: %s",
       ver && ver[0] ? ver : "unknown");
   }
+  snprintf(o->buildline, sizeof(o->buildline), "Build date: %s", __DATE__);
+  snprintf(o->copyline, sizeof(o->copyline), "Copyright (C) 2012-%s Hors", __DATE__ + 7);
   o->have_fonts = o->host.get_fonts &&
     o->host.get_fonts(o->host.user, o->fonts) ? 1 : 0;
   o->have_ctx = o->host.context_get &&

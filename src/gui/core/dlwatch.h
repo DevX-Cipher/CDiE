@@ -40,6 +40,14 @@ void dlwatch_shutdown(void);
 int  dlwatch_is_temp(const char* utf8_path);
 void dlwatch_balloon_click(void* user);
 void dlwatch_menu_toggle(void* user, int enabled);
+int  dlp_start(void);
+void dlp_stop(void);
+int  dlp_running(void);
+void dlp_timer(int on);
+
+uint64_t dlp_tick_ms(void);
+int  dlp_file_size(const char* utf8_path, uint64_t* size);
+int  dlp_can_open(const char* utf8_path, int exclusive);
 
 void dlwatch_on_event(int complete, const char* utf8_path);
 void dlwatch_on_timer(void);

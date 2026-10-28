@@ -90,7 +90,6 @@ static xxwidgets_widget* g_flags, * g_databases, * g_msec, * g_scan, * g_results
 static xxwidgets_widget* g_typeLabel, * g_flagLabel, * g_databaseLabel;
 static xxwidgets_widget* g_reportButton, * g_status;
 static xxwidgets_scan_panel* g_panel;
-static xxwidgets_about_dialog* g_about;
 
 /* Custom dark-chrome child windows */
 static Sidebar* g_sidebar;
@@ -937,6 +936,44 @@ static const char* opt_get_version(void* u)
 	return v;
 }
 
+static int opt_open_url(void* u, const char* url)
+{
+	WCHAR* wide = utf8_to_wide(url);
+	HINSTANCE r;
+	(void)u;
+	if (!wide) return 0;
+	r = ShellExecuteW(NULL, L"open", wide, NULL, NULL, SW_SHOWNORMAL);
+	HeapFree(GetProcessHeap(), 0, wide);
+	return (INT_PTR)r > 32;
+}
+
+static int opt_copy_text(void* u, const char* text)
+{
+	WCHAR* wide = utf8_to_wide(text);
+	SIZE_T bytes;
+	HGLOBAL mem;
+	int ok = 0;
+	(void)u;
+	if (!wide) return 0;
+	bytes = ((SIZE_T)lstrlenW(wide) + 1) * sizeof(WCHAR);
+	mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+	if (mem) {
+		void* p = GlobalLock(mem);
+		if (p) {
+			CopyMemory(p, wide, bytes);
+			GlobalUnlock(mem);
+			if (OpenClipboard(native(g_window))) {
+				EmptyClipboard();
+				if (SetClipboardData(CF_UNICODETEXT, mem)) ok = 1;
+				CloseClipboard();
+			}
+		}
+		if (!ok) GlobalFree(mem);
+	}
+	HeapFree(GetProcessHeap(), 0, wide);
+	return ok;
+}
+
 static int opt_check_update(void* u, char* out, size_t cap)
 {
 	HINSTANCE r;
@@ -971,64 +1008,14 @@ static void do_options_window(int page)
 	host.context_set = opt_context_set;
 	host.get_version = opt_get_version;
 	host.check_update = opt_check_update;
+	host.open_url = opt_open_url;
+	host.copy_text = opt_copy_text;
 	options_show(g_app, g_window, &host, page);
-}
-
-static xxwidgets_status configure_about(void)
-{
-	static const char license[] =
-		"MIT License\n\n"
-		"Permission is hereby granted, free of charge, to any person obtaining a copy "
-		"of this software and associated documentation files (the Software), to deal "
-		"in the Software without restriction, including without limitation the rights "
-		"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
-		"copies of the Software, and to permit persons to whom the Software is "
-		"furnished to do so, subject to the following conditions:\n\n"
-		"The above copyright notice and this permission notice shall be included in all "
-		"copies or substantial portions of the Software.\n\n"
-		"THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR "
-		"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, "
-		"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE "
-		"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER "
-		"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, "
-		"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.";
-	const char* title = gui_backend_app_title();
-	const char* version = title;
-	xxwidgets_status status;
-	while (*version && *version != ' ') ++version;
-	if (*version) ++version;
-	status = xxwidgets_about_dialog_create(&g_about);
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_TITLE, "About cdie");
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_PROGRAM_NAME,
-			"Detect It Easy - cdie");
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_VERSION, version);
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_DESCRIPTION,
-			"Detect It Easy scan engine, ported to C.\n"
-			"Native graphical frontend with the reusable xxwidgets scan panel and dialogs.");
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_COPYRIGHT,
-			"Copyright (C) 2026 hors <horsicq@gmail.com>");
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_WEBSITE,
-			"https://ntinfo.biz");
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_LICENSE, license);
-	if (status == XXWIDGETS_OK)
-		status = xxwidgets_about_dialog_set_text(g_about, XXWIDGETS_ABOUT_CREDITS,
-			"Detect It Easy by hors and contributors\n"
-			"xxfclib - C format and runtime support\n"
-			"xxwidgets - native widgets and common dialogs");
-	return status;
 }
 
 static void do_about(void)
 {
-	xxwidgets_status status = xxwidgets_about_dialog_show(g_about, g_window);
-	if (status != XXWIDGETS_OK) report_ui_error("Open About", status);
+	do_options_window(OPTIONS_PAGE_ABOUT);
 }
 
 static void layout(void)
@@ -1504,8 +1491,8 @@ int gui_run(void)
 	}
 
 	xxwidgets_widget_set_visible(g_window, 0);
-	if (!create_controls() || configure_about() != XXWIDGETS_OK) {
-		MessageBoxW(NULL, L"create_controls or configure_about failed", L"cdie", MB_ICONERROR);
+	if (!create_controls()) {
+		MessageBoxW(NULL, L"create_controls failed", L"cdie", MB_ICONERROR);
 		result = 1; goto finish;
 	}
 
@@ -1578,8 +1565,6 @@ finish:
 	tray_remove();
 	save_config_on_exit();
 	gui_backend_shutdown();
-	if (g_about && xxwidgets_about_dialog_destroy(g_about) != XXWIDGETS_OK) result = 1;
-	g_about = NULL;
 	if (g_panel && xxwidgets_scan_panel_destroy(g_panel) != XXWIDGETS_OK) result = 1;
 	g_panel = NULL;
 	if (g_typePath) HeapFree(GetProcessHeap(), 0, g_typePath);
