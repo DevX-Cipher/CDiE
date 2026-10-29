@@ -30,6 +30,7 @@
 
 #include "../global.h"
 #include <xxfclib/die_engine/die_engine.h>
+#include <xxfclib/scan/xx_scan.h>
 #include <xxfclib/fs/xx_fs.h>
 #include <xxfclib/global/xx_global.h>
 #include <xxfclib/rt/xx_rt.h>
@@ -72,20 +73,20 @@ int gui_backend_init(void)
 	/* GUI defaults follow the Detect It Easy GUI: deep + heuristic + verbose on.
 	 * scan_options_init has already set show type/version/info, use extra/custom
 	 * and sort - the settings that make the output match the console. */
-	g_options.bDeepScan = 1;
-	g_options.bHeuristicScan = 1;
-	g_options.bVerbose = 1;
+	g_options.deep_scan = 1;
+	g_options.heuristic_scan = 1;
+	g_options.verbose = 1;
 
-	g_options.pMainDatabasePath = gui_resolve_db("db");
-	g_options.pExtraDatabasePath = gui_resolve_db("db_extra");
-	g_options.pCustomDatabasePath = gui_resolve_db("db_custom");
+	g_options.main_database_path = gui_resolve_db("db");
+	g_options.extra_database_path = gui_resolve_db("db_extra");
+	g_options.custom_database_path = gui_resolve_db("db_custom");
 
 	/* Load all three once. The "Databases" toggles gate which of them run at
 	 * scan time (via bUseExtraDatabase / bUseCustomDatabase), so a toggle needs
 	 * no reload. A missing db_extra / db_custom directory simply loads nothing. */
-	g_bMainLoaded = db_load(&g_db, g_options.pMainDatabasePath, DB_MAIN);
-	db_load(&g_db, g_options.pExtraDatabasePath, DB_EXTRA);
-	db_load(&g_db, g_options.pCustomDatabasePath, DB_CUSTOM);
+	g_bMainLoaded = db_load(&g_db, g_options.main_database_path, DB_MAIN);
+	db_load(&g_db, g_options.extra_database_path, DB_EXTRA);
+	db_load(&g_db, g_options.custom_database_path, DB_CUSTOM);
 	db_sort(&g_db);
 
 	g_bInited = 1;
@@ -95,17 +96,17 @@ int gui_backend_init(void)
 
 const char* gui_backend_main_db_path(void)
 {
-	return g_options.pMainDatabasePath ? g_options.pMainDatabasePath : "";
+	return g_options.main_database_path ? g_options.main_database_path : "";
 }
 
 const char* gui_backend_extra_db_path(void)
 {
-	return g_options.pExtraDatabasePath ? g_options.pExtraDatabasePath : "";
+	return g_options.extra_database_path ? g_options.extra_database_path : "";
 }
 
 const char* gui_backend_custom_db_path(void)
 {
-	return g_options.pCustomDatabasePath ? g_options.pCustomDatabasePath : "";
+	return g_options.custom_database_path ? g_options.custom_database_path : "";
 }
 
 int gui_backend_set_db_paths(const char* pMain, const char* pExtra, const char* pCustom)
@@ -136,13 +137,13 @@ int gui_backend_set_db_paths(const char* pMain, const char* pExtra, const char* 
 	db_load(&newDb, pNewCustom, DB_CUSTOM);
 	db_sort(&newDb);
 	db_free(&g_db);
-	xx_rt_free(g_options.pMainDatabasePath);
-	xx_rt_free(g_options.pExtraDatabasePath);
-	xx_rt_free(g_options.pCustomDatabasePath);
+	xx_rt_free(g_options.main_database_path);
+	xx_rt_free(g_options.extra_database_path);
+	xx_rt_free(g_options.custom_database_path);
 	g_db = newDb;
-	g_options.pMainDatabasePath = pNewMain;
-	g_options.pExtraDatabasePath = pNewExtra;
-	g_options.pCustomDatabasePath = pNewCustom;
+	g_options.main_database_path = pNewMain;
+	g_options.extra_database_path = pNewExtra;
+	g_options.custom_database_path = pNewCustom;
 	g_bMainLoaded = 1;
 	return 1;
 }
@@ -166,12 +167,12 @@ const char* gui_backend_app_title(void)
 
 void gui_backend_set_flags(int bDeep, int bHeuristic, int bVerbose, int bAggressive, int bHideUnknown, int bFormat)
 {
-	g_options.bDeepScan = bDeep ? 1 : 0;
-	g_options.bHeuristicScan = bHeuristic ? 1 : 0;
-	g_options.bVerbose = bVerbose ? 1 : 0;
-	g_options.bAggressiveScan = bAggressive ? 1 : 0;
-	g_options.bHideUnknown = bHideUnknown ? 1 : 0;
-	g_options.bFormatResult = bFormat ? 1 : 0;
+	g_options.deep_scan = bDeep ? 1 : 0;
+	g_options.heuristic_scan = bHeuristic ? 1 : 0;
+	g_options.verbose = bVerbose ? 1 : 0;
+	g_options.aggressive_scan = bAggressive ? 1 : 0;
+	g_options.hide_unknown = bHideUnknown ? 1 : 0;
+	g_options.format_result = bFormat ? 1 : 0;
 }
 
 void gui_backend_set_databases(int bUseExtra, int bUseCustom)
@@ -300,15 +301,15 @@ int gui_backend_scan_results_type(const char* pUtf8Path, int nTypeId,
 	}
 
 	for (i = 0; pResultFn && i < result.nCount; ++i) {
-		ScanRecord* pRecord = &result.pRecords[i];
+		xx_scan_record* pRecord = &result.pRecords[i];
 		char* pType;
 		char* pDisplayType;
 		const char* pMarker;
 		size_t nMarkerLength;
 		size_t nLength;
-		if (pRecord->bIsUnknown && g_options.bHideUnknown) continue;
-		pType = die_engine_translate_type(pRecord->pType ? pRecord->pType : "");
-		pMarker = pRecord->bIsHeuristic ? "(Heur) " : pRecord->bIsAHeuristic ? "(A-Heur) " : "";
+		if (pRecord->is_unknown && g_options.hide_unknown) continue;
+		pType = xx_scan_translate_type(pRecord->type ? pRecord->type : "");
+		pMarker = pRecord->is_heuristic ? "(Heur) " : pRecord->is_aggressive_heuristic ? "(A-Heur) " : "";
 		if (!pType) goto scan_allocation_failed;
 		nMarkerLength = xx_rt_strlen(pMarker);
 		nLength = nMarkerLength + xx_rt_strlen(pType) + 1;
@@ -316,8 +317,8 @@ int gui_backend_scan_results_type(const char* pUtf8Path, int nTypeId,
 		if (!pDisplayType) { xx_rt_free(pType); goto scan_allocation_failed; }
 		xx_rt_memcpy(pDisplayType, pMarker, nMarkerLength);
 		xx_rt_memcpy(pDisplayType + nMarkerLength, pType, nLength - nMarkerLength);
-		pResultFn(pDisplayType, pRecord->pName ? pRecord->pName : "",
-			pRecord->pVersion ? pRecord->pVersion : "", pRecord->pInfo ? pRecord->pInfo : "", pUserData);
+		pResultFn(pDisplayType, pRecord->name ? pRecord->name : "",
+			pRecord->version ? pRecord->version : "", pRecord->info ? pRecord->info : "", pUserData);
 		xx_rt_free(pDisplayType);
 		xx_rt_free(pType);
 	}
