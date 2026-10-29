@@ -224,7 +224,7 @@ jobs:
         working-directory: cdie
         env:
           CDIE_DATABASE_DIR: ${{ github.workspace }}\cdie\dep\Detect-It-Easy
-        run: call packaging\windows\build_portable_windows.cmd x64 win64
+        run: call run\build_portable_windows.cmd x64 win64
       - name: Verify Windows package
         shell: pwsh
         working-directory: cdie
