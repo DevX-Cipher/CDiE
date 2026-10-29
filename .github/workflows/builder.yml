@@ -109,71 +109,74 @@ jobs:
           path: cdie/release/cdie_ubuntu24_amd64_*.zip
           if-no-files-found: error
 
-  macos:
-    needs: resolve-deps
-    runs-on: macos-15
-    steps:
-      - name: Check out cdie
-        uses: actions/checkout@v4
-        with:
-          path: cdie
-          persist-credentials: false
-      - name: Check out xxfclib
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/xxfclib
-          ref: ${{ needs.resolve-deps.outputs.xxfclib }}
-          path: cdie/dep/xxfclib
-          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
-          persist-credentials: false
-      - name: Check out cdisasm
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/cdisasm
-          ref: ${{ needs.resolve-deps.outputs.cdisasm }}
-          path: cdie/dep/cdisasm
-          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
-          persist-credentials: false
-      - name: Check out signature database
-        uses: actions/checkout@v4
-        with:
-          repository: horsicq/Detect-It-Easy
-          ref: ${{ needs.resolve-deps.outputs.detect_it_easy }}
-          path: cdie/dep/Detect-It-Easy
-          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
-          persist-credentials: false
-      - name: Configure
-        working-directory: cdie
-        run: |
-          test "$(uname -m)" = arm64
-          test -d dep/Detect-It-Easy/db
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-            -DXXFCLIB_DIR="$PWD/dep/xxfclib" \
-            -DXXFC_CDISASM_DIR="$PWD/dep/cdisasm" \
-            -DCDIE_DATABASE_DIR="$PWD/dep/Detect-It-Easy"
-      - name: Build
-        working-directory: cdie
-        run: cmake --build build --parallel 2
-      - name: Package and verify macOS
-        working-directory: cdie
-        run: |
-          version=$(head -n 1 release_version.txt)
-          cpack --config build/CPackConfig.cmake -G ZIP -B release
-          archive="release/cdie_mac_arm64_portable_${version}.zip"
-          test -s "$archive"
-
-          extract_dir=$(mktemp -d)
-          unzip -q "$archive" -d "$extract_dir"
-          package_dir="$extract_dir/cdie_mac_arm64_portable_${version}"
-          test -x "$package_dir/cdie"
-          test -n "$(find "$package_dir/db" -type f -print -quit)"
-
-      - name: Save macOS package
-        uses: actions/upload-artifact@v4
-        with:
-          name: cdie-macos-arm64
-          path: cdie/release/cdie_mac_arm64_portable_*.zip
-          if-no-files-found: error
+  # macOS build temporarily disabled.
+  # To re-enable: uncomment this job, add `macos` back to publish-beta `needs`,
+  # and restore the zip counts / macOS check in "Verify packages and current master".
+  # macos:
+  #   needs: resolve-deps
+  #   runs-on: macos-15
+  #   steps:
+  #     - name: Check out cdie
+  #       uses: actions/checkout@v4
+  #       with:
+  #         path: cdie
+  #         persist-credentials: false
+  #     - name: Check out xxfclib
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: horsicq/xxfclib
+  #         ref: ${{ needs.resolve-deps.outputs.xxfclib }}
+  #         path: cdie/dep/xxfclib
+  #         token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+  #         persist-credentials: false
+  #     - name: Check out cdisasm
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: horsicq/cdisasm
+  #         ref: ${{ needs.resolve-deps.outputs.cdisasm }}
+  #         path: cdie/dep/cdisasm
+  #         token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+  #         persist-credentials: false
+  #     - name: Check out signature database
+  #       uses: actions/checkout@v4
+  #       with:
+  #         repository: horsicq/Detect-It-Easy
+  #         ref: ${{ needs.resolve-deps.outputs.detect_it_easy }}
+  #         path: cdie/dep/Detect-It-Easy
+  #         token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+  #         persist-credentials: false
+  #     - name: Configure
+  #       working-directory: cdie
+  #       run: |
+  #         test "$(uname -m)" = arm64
+  #         test -d dep/Detect-It-Easy/db
+  #         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  #           -DXXFCLIB_DIR="$PWD/dep/xxfclib" \
+  #           -DXXFC_CDISASM_DIR="$PWD/dep/cdisasm" \
+  #           -DCDIE_DATABASE_DIR="$PWD/dep/Detect-It-Easy"
+  #     - name: Build
+  #       working-directory: cdie
+  #       run: cmake --build build --parallel 2
+  #     - name: Package and verify macOS
+  #       working-directory: cdie
+  #       run: |
+  #         version=$(head -n 1 release_version.txt)
+  #         cpack --config build/CPackConfig.cmake -G ZIP -B release
+  #         archive="release/cdie_mac_arm64_portable_${version}.zip"
+  #         test -s "$archive"
+  #
+  #         extract_dir=$(mktemp -d)
+  #         unzip -q "$archive" -d "$extract_dir"
+  #         package_dir="$extract_dir/cdie_mac_arm64_portable_${version}"
+  #         test -x "$package_dir/cdie"
+  #         test -n "$(find "$package_dir/db" -type f -print -quit)"
+  #
+  #     - name: Save macOS package
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: cdie-macos-arm64
+  #         path: cdie/release/cdie_mac_arm64_portable_*.zip
+  #         if-no-files-found: error
 
   windows:
     needs: resolve-deps
@@ -249,7 +252,8 @@ jobs:
 
   publish-beta:
     if: github.ref == 'refs/heads/master'
-    needs: [resolve-deps, ubuntu, macos, windows]
+    # needs: [resolve-deps, ubuntu, macos, windows]  # macOS disabled
+    needs: [resolve-deps, ubuntu, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -267,9 +271,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 3
+          test "$(find release-assets -maxdepth 1 -type f -name '*.zip' | wc -l)" -eq 2
           test "$(find release-assets -maxdepth 1 -type f -name 'cdie_ubuntu24_amd64_*.zip' | wc -l)" -eq 1
-          test "$(find release-assets -maxdepth 1 -type f -name 'cdie_mac_arm64_portable_*.zip' | wc -l)" -eq 1
+          # test "$(find release-assets -maxdepth 1 -type f -name 'cdie_mac_arm64_portable_*.zip' | wc -l)" -eq 1
           test "$(find release-assets -maxdepth 1 -type f -name 'cdie_win_x64_portable_*.zip' | wc -l)" -eq 1
           latest=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/master" --jq .object.sha)
           test "$latest" = "$GITHUB_SHA"
