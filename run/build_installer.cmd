@@ -1,9 +1,8 @@
 @echo off
 rem ---------------------------------------------------------------------------
 rem Build the cdie GUI (xxwidgets front end) with MSVC directly (no CMake for
-rem the app itself). Produces:
-rem
-rem   build_msvc\cdie_gui.exe   static CRT, WINDOWS subsystem
+rem the app itself), then build the installer. The build tree lives under
+rem %TEMP%\cdie_setup; only the finished cdie-setup*.exe is left in release\.
 rem
 rem Every .c under src except the console entry points (utils_entry.c,
 rem main_console.c) is compiled in, including everything under src\gui, plus
@@ -13,12 +12,12 @@ rem Dependencies (dep\xxwidgets, dep\xxfclib): if no prebuilt .lib is found,
 rem they are configured and built automatically with CMake (Release, static
 rem CRT /MT) into dep\<name>\build, then picked up.
 rem
-rem Usage (from any prompt):  run\build_msvc_gui.cmd [clean | cleanall | rebuild] [store] [installer]
-rem   store      build with /DCDIE_STORE_BUILD
-rem   installer  after the app builds, also run run\build_installer.cmd
-rem   clean      delete build_msvc (objects, .res, exe); dependencies are kept
-rem   cleanall   clean, and also delete dep\xxwidgets\build and dep\xxfclib\build
-rem   rebuild    clean, then build
+rem Usage (from any prompt):  run\build_msvc_gui.cmd [clean | cleanall | rebuild] [store] [noinstaller]
+rem   store        build with /DCDIE_STORE_BUILD
+rem   noinstaller  build the app only; by default the installer is built after it
+rem   clean        delete the temp build folder
+rem   cleanall     clean, and also delete dep\xxwidgets\build and dep\xxfclib\build
+rem   rebuild      clean, then build
 rem Overrides (optional):
 rem   set "VCVARS=...\vcvars64.bat"
 rem   set "XXW_LIB=C:\full\path\xxwidgets.lib"
@@ -30,17 +29,19 @@ setlocal enabledelayedexpansion
 
 set "ROOT=%~dp0.."
 set "SRC=%ROOT%\src"
-set "OUT=%ROOT%\build_msvc"
+set "WORK_ROOT=%TEMP%\cdie_setup"
+set "OUT=%WORK_ROOT%\build_msvc"
 set "GUI=%SRC%\gui"
 set "DEP=%ROOT%\dep"
 set "RES=%GUI%\resource"
 set "STORE_BUILD=0"
-set "BUILD_INSTALLER=0"
+set "BUILD_INSTALLER=1"
 set "DO_REBUILD="
 for %%a in (%*) do (
-    if /i "%%~a"=="store"     set "STORE_BUILD=1"
-    if /i "%%~a"=="installer" set "BUILD_INSTALLER=1"
-    if /i "%%~a"=="rebuild"   set "DO_REBUILD=1"
+    if /i "%%~a"=="store"       set "STORE_BUILD=1"
+    if /i "%%~a"=="installer"   set "BUILD_INSTALLER=1"
+    if /i "%%~a"=="noinstaller" set "BUILD_INSTALLER=0"
+    if /i "%%~a"=="rebuild"     set "DO_REBUILD=1"
 )
 
 rem --- Clean targets (no Visual Studio environment needed) -------------------
@@ -104,7 +105,7 @@ if defined REBUILD_DEPS (
     set "XXW_LIB="
     set "XXF_LIB="
     call :build_dep "%DEP%\xxwidgets" xxwidgets || exit /b 1
-    call :build_dep "%DEP%\xxfclib"   || exit /b 1
+    call :build_dep "%DEP%\xxfclib" die_engine || exit /b 1
 )
 
 if not defined XXW_LIB call :find_lib XXW_LIB "%DEP%\xxwidgets" "xxwidgets*.lib"
@@ -123,7 +124,7 @@ if not defined XXW_LIB (
 if not defined XXF_LIB call :find_lib XXF_LIB "%DEP%\xxfclib" "*die_engine*.lib"
 if not defined XXF_LIB (
     echo die_engine lib not found - building xxfclib...
-    call :build_dep "%DEP%\xxfclib" || exit /b 1
+    call :build_dep "%DEP%\xxfclib" die_engine || exit /b 1
     call :find_lib XXF_LIB "%DEP%\xxfclib" "*die_engine*.lib"
 )
 if not defined XXF_LIB (
@@ -156,7 +157,7 @@ set "GUI_SOURCES="
 for /r "%SRC%" %%f in (*.c) do (
     set "skip="
     echo %%~dpf| findstr /i "\\gui\\" >nul && set "skip=1"
-	echo %%~dpf| findstr /i "\\installer\\" >nul && set "skip=1"
+    echo %%~dpf| findstr /i "\\installer\\" >nul && set "skip=1"
     if /i "%%~nxf"=="utils_entry.c" set "skip=1"
     if /i "%%~nxf"=="main_console.c" set "skip=1"
     if not defined skip set "GUI_SOURCES=!GUI_SOURCES! "%%f""
@@ -185,7 +186,6 @@ if "%STORE_BUILD%"=="1" (
     echo Building NORMAL version
 )
 
-
 if not exist "%OUT%\obj_gui" mkdir "%OUT%\obj_gui"
 cl /nologo /O1 /GL /Gy /Gw /GS- /W3 /MT /utf-8 /DNDEBUG /DXXWIDGETS_STATIC /DXXFC_STATIC !EXTRA_DEFINES! ^
    -I"%SRC%" -I"%GUI%" -I"%RES%" -I"%XXW_INC%" -I"%XXF_INC%" ^
@@ -202,8 +202,24 @@ echo   cdie_gui.exe
 if "%BUILD_INSTALLER%"=="1" (
     echo.
     echo Building installer...
+    if not exist "%ROOT%\build_msvc" mkdir "%ROOT%\build_msvc"
+    copy /y "%OUT%\cdie_gui.exe" "%ROOT%\build_msvc\cdie_gui.exe" >nul
     call "%SRC%\installer\build_installer.cmd"
-    if errorlevel 1 ( echo INSTALLER BUILD FAILED & exit /b 1 )
+    if errorlevel 1 (
+        if exist "%ROOT%\build_msvc" rmdir /s /q "%ROOT%\build_msvc"
+        echo INSTALLER BUILD FAILED
+        exit /b 1
+    )
+
+    set "RELEASE_DIR=%ROOT%\release"
+    if not exist "!RELEASE_DIR!" mkdir "!RELEASE_DIR!"
+    set "SETUP_COPIED="
+    call :copy_setup "%ROOT%\build_msvc"
+    call :copy_setup "%OUT%"
+    call :copy_setup "%SRC%\installer"
+    if exist "%ROOT%\build_msvc" rmdir /s /q "%ROOT%\build_msvc"
+    if not defined SETUP_COPIED echo WARNING: no cdie-setup*.exe found
+    if defined SETUP_COPIED if exist "!WORK_ROOT!" rmdir /s /q "!WORK_ROOT!"
 )
 endlocal
 exit /b 0
@@ -212,15 +228,29 @@ rem ===========================================================================
 rem Subroutines
 rem ===========================================================================
 
+rem :copy_setup <search root>
+rem   Copies any cdie-setup*.exe found under the root into the release folder.
+:copy_setup
+for /r "%~1" %%f in (cdie-setup*.exe) do (
+    copy /y "%%f" "!RELEASE_DIR!\" >nul
+    echo Copied to !RELEASE_DIR!\ : %%~nxf
+    set "SETUP_COPIED=1"
+)
+exit /b 0
+
 rem :do_clean [all]
-rem   Removes the app build folder. With "all", also the CMake build folders of
+rem   Removes the temp build folder. With "all", also the CMake build folders of
 rem   the dependencies (the next build then recompiles them, which is slow).
 :do_clean
-if exist "!OUT!" (
-    echo Removing !OUT! ...
-    rmdir /s /q "!OUT!"
+if exist "!WORK_ROOT!" (
+    echo Removing !WORK_ROOT! ...
+    rmdir /s /q "!WORK_ROOT!"
 ) else (
-    echo Nothing to clean in !OUT!
+    echo Nothing to clean in !WORK_ROOT!
+)
+if exist "!ROOT!\build_msvc" (
+    echo Removing !ROOT!\build_msvc ...
+    rmdir /s /q "!ROOT!\build_msvc"
 )
 if /i "%~1"=="all" (
     for %%d in ("!DEP!\xxwidgets\build" "!DEP!\xxfclib\build") do (
