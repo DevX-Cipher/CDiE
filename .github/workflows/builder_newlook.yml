@@ -118,7 +118,7 @@ jobs:
           path: cdie/release/cdie_ubuntu24_amd64_*.zip
           if-no-files-found: error
 
-   # macos:
+  # macos:
   #   needs: resolve-deps
   #   runs-on: macos-15
   #   steps:
@@ -258,4 +258,66 @@ jobs:
         with:
           name: cdie-newlook-win64
           path: cdie/release/cdie_win_x64_portable_*.zip
+          if-no-files-found: error
+
+  windows-setup:
+    needs: resolve-deps
+    runs-on: windows-2022
+    steps:
+      - name: Check out cdie NewLook
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-deps.outputs.cdie }}
+          path: cdie
+          persist-credentials: false
+      - name: Check out xxfclib
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxfclib
+          ref: ${{ needs.resolve-deps.outputs.xxfclib }}
+          path: cdie/dep/xxfclib
+          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Check out cdisasm
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/cdisasm
+          ref: ${{ needs.resolve-deps.outputs.cdisasm }}
+          path: cdie/dep/cdisasm
+          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Check out xxwidgets
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/xxwidgets
+          ref: ${{ needs.resolve-deps.outputs.xxwidgets }}
+          path: cdie/dep/xxwidgets
+          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Check out signature database
+        uses: actions/checkout@v4
+        with:
+          repository: horsicq/Detect-It-Easy
+          ref: ${{ needs.resolve-deps.outputs.detect_it_easy }}
+          path: cdie/dep/Detect-It-Easy
+          token: ${{ secrets.CDIE_DEPS_TOKEN || github.token }}
+          persist-credentials: false
+      - name: Build and package Windows setup
+        shell: cmd
+        working-directory: cdie
+        env:
+          CDIE_DATABASE_DIR: ${{ github.workspace }}\cdie\dep\Detect-It-Easy
+        run: call run\build_installer.cmd
+      - name: Verify Windows setup
+        shell: pwsh
+        working-directory: cdie
+        run: |
+          $setups = @(Get-ChildItem release -Filter 'cdie-setup*.exe')
+          if ($setups.Count -ne 1) { throw "Expected one setup exe, found $($setups.Count)" }
+          if ($setups[0].Length -lt 1MB) { throw "Setup exe is suspiciously small" }
+      - name: Save Windows setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: cdie-newlook-win64-setup
+          path: cdie/release/cdie-setup*.exe
           if-no-files-found: error
