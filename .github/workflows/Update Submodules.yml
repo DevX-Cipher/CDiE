@@ -10,10 +10,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [master, NewLook]
     steps:
-      - name: Checkout repository
+      - name: Checkout ${{ matrix.branch }}
         uses: actions/checkout@v4
         with:
+          ref: ${{ matrix.branch }}
           submodules: recursive
           fetch-depth: 0
 
@@ -36,4 +41,4 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "Update submodules to latest versions"
-          git push
+          git push origin HEAD:${{ matrix.branch }}
