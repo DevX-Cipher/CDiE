@@ -1,7 +1,7 @@
 @echo off
 setlocal
 rem Repo convention:
-rem - build trees and CPack staging always live under %TEMP%
+rem - build trees and staging always live under %TEMP%
 rem - the repository release\ directory stores only ready-to-use packages
 rem
 rem cdie has no external dependencies, so unlike the Qt projects this script
@@ -9,6 +9,10 @@ rem takes no Qt root: just the target platform and a package suffix.
 rem
 rem   build_portable_windows.cmd <cmake-platform> <package-suffix>
 rem   build_portable_windows.cmd x64 win64
+rem
+rem The portable package is the console binary (plus docs and signature
+rem database) only. Any .dll and .lib files are removed from it; build those
+rem with build_dll_windows.cmd and build_lib_windows.cmd.
 rem
 rem Optional environment variables:
 rem   CMAKE_GENERATOR_NAME  default "Ninja". Any Visual Studio generator
@@ -26,7 +30,7 @@ if "%~2"=="" (
     exit /b 1
 )
 
-for %%I in ("%~dp0..\..") do set "PROJECT_ROOT=%%~fI"
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 
 set "CMAKE_PLATFORM=%~1"
 set "PACKAGE_SUFFIX=%~2"
@@ -49,6 +53,10 @@ if defined GEN_IS_VS (
 ) else (
     set "GEN_ARGS=-DCMAKE_BUILD_TYPE=Release"
 )
+
+rem The portable package is the console binary only; skip building the
+rem shared/static libraries from lib\ altogether.
+set "GEN_ARGS=%GEN_ARGS% -DCDIE_BUILD_LIBRARY=OFF"
 
 rem A Visual Studio generator finds the compiler itself. Every other
 rem generator compiles with whatever cl.exe the environment provides, so the
@@ -73,8 +81,7 @@ set /p RELEASE_VERSION=<"%PROJECT_ROOT%\release_version.txt"
 set "PACKAGE_NAME=%PACKAGE_BASENAME%_%RELEASE_VERSION%"
 set "RELEASE_DIR=%PROJECT_ROOT%\release"
 set "PACKAGE_DIR=%RELEASE_DIR%\%PACKAGE_NAME%"
-set "CPACK_DIR=%WORK_ROOT%\cpack"
-set "CPACK_OUTPUT_DIR=%WORK_ROOT%\output"
+set "PACKAGE_ZIP=%RELEASE_DIR%\%PACKAGE_NAME%.zip"
 
 rem DB_ARG is passed as a single quoted token at the call site below, so a
 rem CDIE_DATABASE_DIR under Program Files or a profile directory survives.
@@ -106,7 +113,6 @@ if defined GEN_IS_MULTI (
 ) else (
     set "APP_EXE=%BUILD_DIR%\src\console\%APP_NAME%"
 )
-set "CPACK_CONFIG=%BUILD_DIR%\CPackConfig.cmake"
 
 if not exist "%APP_EXE%" (
     echo Built executable not found:
@@ -114,19 +120,16 @@ if not exist "%APP_EXE%" (
     exit /b 1
 )
 
-if not exist "%CPACK_CONFIG%" (
-    echo CPack config not found:
-    echo   %CPACK_CONFIG%
-    exit /b 1
-)
-
 if exist "%PACKAGE_DIR%" rmdir /s /q "%PACKAGE_DIR%"
-if exist "%CPACK_DIR%" rmdir /s /q "%CPACK_DIR%"
-if exist "%CPACK_OUTPUT_DIR%" rmdir /s /q "%CPACK_OUTPUT_DIR%"
 
 echo Installing portable package folder...
 cmake --install "%BUILD_DIR%" --config Release --prefix "%PACKAGE_DIR%"
 if errorlevel 1 exit /b 1
+
+rem Libraries are not part of the portable package (see build_dll_windows.cmd
+rem and build_lib_windows.cmd).
+echo Removing .dll and .lib files from the package...
+for /r "%PACKAGE_DIR%" %%F in (*.dll *.lib) do del /f /q "%%F"
 
 rem A package that quietly lost its signatures -- a mistyped or unquoted
 rem CDIE_DATABASE_DIR fails the EXISTS test in CMakeLists.txt and only prints
@@ -142,32 +145,26 @@ if /i not "%CDIE_DATABASE_DIR%"=="NONE" (
     )
 )
 
-echo Creating portable zip with CPack...
-cpack --config "%CPACK_CONFIG%" -G ZIP -C Release -B "%CPACK_DIR%" -D "CPACK_OUTPUT_FILE_PREFIX=%CPACK_OUTPUT_DIR%"
-if errorlevel 1 exit /b 1
-
-set "CPACK_ZIP="
-for /r "%CPACK_OUTPUT_DIR%" %%F in (*.zip) do (
-    set "CPACK_ZIP=%%~fF"
-    goto cpack_zip_found
-)
-
-echo CPack did not produce a zip archive in:
-echo   %CPACK_OUTPUT_DIR%
-exit /b 1
-
-:cpack_zip_found
-for %%I in ("%CPACK_ZIP%") do set "PACKAGE_ZIP=%RELEASE_DIR%\%%~nxI"
+rem The zip is made from the cleaned package folder rather than by CPack,
+rem because CPack stages its own install and would put the libraries back.
+echo Creating portable zip...
 if exist "%PACKAGE_ZIP%" del /f /q "%PACKAGE_ZIP%"
-copy /y "%CPACK_ZIP%" "%PACKAGE_ZIP%" >nul
-if errorlevel 1 exit /b 1
+pushd "%RELEASE_DIR%"
+cmake -E tar cf "%PACKAGE_ZIP%" --format=zip "%PACKAGE_NAME%"
+set "ZIP_ERR=%errorlevel%"
+popd
+if not "%ZIP_ERR%"=="0" (
+    echo Failed to create zip:
+    echo   %PACKAGE_ZIP%
+    exit /b 1
+)
 
 if exist "%WORK_ROOT%" rmdir /s /q "%WORK_ROOT%"
 
 echo.
 echo Portable package folder created:
 echo   %PACKAGE_DIR%
-echo Portable zip created by CPack:
+echo Portable zip created:
 echo   %PACKAGE_ZIP%
 
 endlocal
