@@ -23,9 +23,15 @@ add_executable(cdie_gui WIN32
 if(WIN32)
     target_sources(cdie_gui PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/main_gui.c
-		${CMAKE_CURRENT_LIST_DIR}/core/tray.c
+        ${CMAKE_CURRENT_LIST_DIR}/core/tray.c
+        ${CMAKE_CURRENT_LIST_DIR}/core/config.c
+        ${CMAKE_CURRENT_LIST_DIR}/core/dlwatch.c
+        ${CMAKE_CURRENT_LIST_DIR}/core/updater.c
         ${CMAKE_CURRENT_LIST_DIR}/panels/header.c
-        ${CMAKE_CURRENT_LIST_DIR}/panels/infobar.c)
+        ${CMAKE_CURRENT_LIST_DIR}/panels/infobar.c
+        ${CMAKE_CURRENT_LIST_DIR}/panels/options.c
+        ${CMAKE_CURRENT_LIST_DIR}/panels/signatures.c
+        ${CMAKE_CURRENT_LIST_DIR}/panels/strings.c)
 else()
     target_sources(cdie_gui PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/main_gui_gtk.c)
@@ -35,7 +41,9 @@ endif()
 target_sources(cdie_gui PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/controls/sidebar.c
     ${CMAKE_CURRENT_LIST_DIR}/controls/tabbar.c
-    ${CMAKE_CURRENT_LIST_DIR}/controls/bottombar.c)
+    ${CMAKE_CURRENT_LIST_DIR}/controls/bottombar.c
+    ${CMAKE_CURRENT_LIST_DIR}/controls/treeview.c
+    ${CMAKE_CURRENT_LIST_DIR}/controls/hexviewer.c)
 
 target_include_directories(cdie_gui PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/..
@@ -45,14 +53,14 @@ target_include_directories(cdie_gui PRIVATE
 target_link_libraries(cdie_gui PRIVATE xxfclib::die_engine xxwidgets::xxwidgets)
 
 if(WIN32)
-  if(CDIE_STORE_BUILD)
+    if(CDIE_STORE_BUILD)
         target_compile_definitions(cdie_gui PRIVATE CDIE_STORE_BUILD)
     endif()
     target_sources(cdie_gui PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/platform/platform_win32.c
         ${CMAKE_CURRENT_LIST_DIR}/resource/cdie_gui.rc)
     target_link_libraries(cdie_gui PRIVATE
-        user32 gdi32 comdlg32 comctl32 shell32 ole32 advapi32 dwmapi)
+        user32 gdi32 comdlg32 comctl32 shell32 ole32 advapi32 dwmapi msimg32)
 elseif(APPLE)
     enable_language(OBJC)
     target_sources(cdie_gui PRIVATE
