@@ -321,3 +321,67 @@ jobs:
           name: cdie-newlook-win64-setup
           path: cdie/release/cdie-setup*.exe
           if-no-files-found: error
+
+  publish-newlook:
+    needs: [resolve-deps, ubuntu, windows, windows-setup]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    concurrency:
+      group: cdie-newlook-publish
+      cancel-in-progress: false
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cdie-newlook-*
+          merge-multiple: true
+          path: release-assets
+      - name: Verify packages
+        run: |
+          test "$(find release-assets -maxdepth 1 -type f | wc -l)" -eq 3
+          test "$(find release-assets -maxdepth 1 -type f -name 'cdie_ubuntu24_amd64_*.zip' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name 'cdie_win_x64_portable_*.zip' | wc -l)" -eq 1
+          test "$(find release-assets -maxdepth 1 -type f -name 'cdie-setup*.exe' | wc -l)" -eq 1
+      - name: Rename packages for NewLook
+        run: |
+          cd release-assets
+          for f in cdie_win_x64_portable_*.zip; do
+            mv "$f" "${f/cdie_win_x64_portable_/cdie_newlook_win_x64_portable_}"
+          done
+          for f in cdie_ubuntu24_amd64_*.zip; do
+            mv "$f" "${f/cdie_ubuntu24_amd64_/cdie_newlook_ubuntu24_amd64_}"
+          done
+          ls -l
+      - name: Point NewLook-Beta tag at packaged commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const sha = '${{ needs.resolve-deps.outputs.cdie }}';
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: 'tags/NewLook-Beta' });
+              await github.rest.git.updateRef({
+                owner, repo, ref: 'tags/NewLook-Beta', sha, force: true,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.git.createRef({
+                owner, repo, ref: 'refs/tags/NewLook-Beta', sha,
+              });
+            }
+      - name: Upload to NewLook-Beta release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: NewLook-Beta
+          name: NewLook Beta
+          prerelease: true
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: release-assets/*
+          body: |
+            cdie NewLook commit: ${{ needs.resolve-deps.outputs.cdie }}
+            xxfclib: ${{ needs.resolve-deps.outputs.xxfclib }}
+            cdisasm: ${{ needs.resolve-deps.outputs.cdisasm }}
+            xxwidgets: ${{ needs.resolve-deps.outputs.xxwidgets }}
+            Detect-It-Easy: ${{ needs.resolve-deps.outputs.detect_it_easy }}
